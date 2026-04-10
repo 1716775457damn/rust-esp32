@@ -10,11 +10,12 @@ crate-type = ["staticlib"]
 
 [dependencies]
 # ESP-IDF 系统服务 (WiFi, HTTP, Logging 等)
-esp-idf-svc = { version = "0.50", default-features = false, features = ["critical-section", "std", "alloc"] }
+esp-idf-svc = { version = "0.50", default-features = false, features = ["critical-section", "std", "alloc", "experimental"] }
 esp-idf-hal = { version = "0.45", default-features = false }
 embedded-svc = "0.28"
 anyhow = "1.0"
 log = "0.4"
+tjpgdec-rs = "0.4.0"
 # 显式声明 esp-idf-sys，并禁用所有默认特性（特别是 binstart），防止生成多余的 app_main
 esp-idf-sys = { version = "0.36", default-features = false, features = ["std", "native"] }
 

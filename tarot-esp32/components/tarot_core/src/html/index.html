@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tarot Card Uploader</title>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --slot-bg: #2a2a2a;
+            --slot-hover: #3a3a3a;
+            --accent: #d4af37;
+            --text-main: #f0f0f0;
+            --text-muted: #888888;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            color: var(--accent);
+            margin-bottom: 5px;
+            text-align: center;
+            text-shadow: 0 0 10px rgba(212, 175, 55, 0.3);
+        }
+        p {
+            color: var(--text-muted);
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .grid-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 15px;
+            width: 100%;
+            max-width: 900px;
+        }
+        .card-slot {
+            background-color: var(--slot-bg);
+            border: 1px solid #333;
+            border-radius: 8px;
+            aspect-ratio: 1 / 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .card-slot:hover {
+            background-color: var(--slot-hover);
+            border-color: var(--accent);
+            transform: translateY(-2px);
+        }
+        .slot-id {
+            font-size: 24px;
+            font-weight: bold;
+            color: rgba(255,255,255,0.1);
+            position: absolute;
+            z-index: 1;
+        }
+        .slot-title {
+            z-index: 2;
+            font-size: 14px;
+            color: var(--accent);
+            margin-bottom: 5px;
+        }
+        .slot-status {
+            z-index: 2;
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 12px;
+            background: rgba(0,0,0,0.5);
+        }
+        .loaded {
+            background: rgba(46, 204, 113, 0.2);
+            color: #2ecc71;
+            border: 1px solid #2ecc71;
+        }
+        img.preview {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            z-index: 0;
+            opacity: 0.6;
+        }
+        #upload-layer {
+            display: none;
+        }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(212, 175, 55, 0.9);
+            color: #000;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            z-index: 100;
+        }
+    </style>
+</head>
+<body>
+    <h1>Tarot Deck Uploader</h1>
+    <p>Select a slot to upload to ESP32 (Max 360x360 JPEG).</p>
+
+    <div class="grid-container" id="grid">
+        <!-- Slots will be generated here by JS -->
+    </div>
+
+    <input type="file" id="fileInput" accept="image/jpeg, image/png, image/webp" style="display: none;">
+    
+    <div id="toast" class="toast">Uploaded Successfully!</div>
+
+    <script>
+        const MAX_CARDS = 22;
+        const TARGET_SIZE = 360;
+        
+        const MAJOR_ARCANA = [
+            "0. The Fool", "I. The Magician", "II. High Priestess", "III. The Empress",
+            "IV. The Emperor", "V. The Hierophant", "VI. The Lovers", "VII. The Chariot",
+            "VIII. Strength", "IX. The Hermit", "X. Wheel of Fortune", "XI. Justice",
+            "XII. The Hanged Man", "XIII. Death", "XIV. Temperance", "XV. The Devil",
+            "XVI. The Tower", "XVII. The Star", "XVIII. The Moon", "XIX. The Sun",
+            "XX. Judgement", "XX1. The World"
+        ];
+
+        const grid = document.getElementById('grid');
+        const fileInput = document.getElementById('fileInput');
+        let currentSlot = null;
+
+        // Initialize Grid
+        for (let i = 0; i < MAX_CARDS; i++) {
+            let slot = document.createElement('div');
+            slot.className = 'card-slot';
+            slot.setAttribute('data-id', i);
+            
+            let name = MAJOR_ARCANA[i] ? MAJOR_ARCANA[i] : `Card ${i}`;
+            
+            slot.innerHTML = `
+                <div class="slot-id">${i}</div>
+                <div class="slot-title">${name}</div>
+                <div class="slot-status" id="status-${i}">Empty</div>
+            `;
+            
+            // Check if card exists in localStorage as a quick cache (optional)
+            if(localStorage.getItem('card_'+i)) {
+                setStatus(slot, i, 'Loaded');
+            }
+
+            slot.addEventListener('click', () => {
+                currentSlot = i;
+                fileInput.click();
+            });
+            
+            grid.appendChild(slot);
+        }
+
+        // Handle File Selection
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const statusBadge = document.getElementById(`status-${currentSlot}`);
+            statusBadge.innerText = "Processing...";
+            statusBadge.style.color = "var(--accent)";
+            
+            processImage(file, (blob, dataUrl) => {
+                uploadImage(currentSlot, blob, dataUrl);
+            });
+            
+            // Reset input
+            fileInput.value = '';
+        });
+
+        // Resize & Crop Image using Canvas offscreen
+        function processImage(file, callback) {
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = TARGET_SIZE;
+                    canvas.height = TARGET_SIZE;
+                    const ctx = canvas.getContext('2d');
+                    
+                    // Simple cover cropping
+                    let srcWidth = img.width;
+                    let srcHeight = img.height;
+                    let scale = Math.max(TARGET_SIZE / srcWidth, TARGET_SIZE / srcHeight);
+                    
+                    let dx = (TARGET_SIZE - srcWidth * scale) / 2;
+                    let dy = (TARGET_SIZE - srcHeight * scale) / 2;
+                    
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(0, 0, TARGET_SIZE, TARGET_SIZE);
+                    ctx.drawImage(img, dx, dy, srcWidth * scale, srcHeight * scale);
+                    
+                    // Convert to high quality JPEG
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+                    canvas.toBlob((blob) => {
+                        callback(blob, dataUrl);
+                    }, 'image/jpeg', 0.85);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // Upload to ESP32
+        function uploadImage(slotId, blob, dataUrl) {
+            const statusBadge = document.getElementById(`status-${slotId}`);
+            statusBadge.innerText = "Uploading...";
+            
+            fetch(`/upload?slot=${slotId}`, {
+                method: 'POST',
+                body: blob,
+                headers: {
+                    'Content-Type': 'application/octet-stream'
+                }
+            })
+            .then(response => {
+                if(response.ok) {
+                    const slotNode = grid.children[slotId];
+                    setStatus(slotNode, slotId, 'Uploaded!');
+                    
+                    // Set preview background
+                    let existingPreview = slotNode.querySelector('img.preview');
+                    if(!existingPreview) {
+                        existingPreview = document.createElement('img');
+                        existingPreview.className = 'preview';
+                        slotNode.appendChild(existingPreview);
+                    }
+                    existingPreview.src = dataUrl;
+                    
+                    // Cache
+                    localStorage.setItem('card_'+slotId, 'true');
+                    showToast(`Card ${slotId} saved!`);
+                } else {
+                    throw new Error('Server returned ' + response.status);
+                }
+            })
+            .catch(error => {
+                console.error('Upload failed:', error);
+                statusBadge.innerText = "Failed";
+                statusBadge.style.color = "red";
+                statusBadge.style.border = "1px solid red";
+            });
+        }
+        
+        function setStatus(node, id, text) {
+            const badge = node.querySelector('.slot-status');
+            badge.innerText = text;
+            badge.className = 'slot-status loaded';
+        }
+        
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg;
+            t.style.opacity = 1;
+            setTimeout(() => { t.style.opacity = 0; }, 3000);
+        }
+    </script>
+</body>
+</html>

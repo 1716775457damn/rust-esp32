@@ -10,3 +10,9 @@ build-std = ["std", "panic_abort"]
 [env]
 # 确保 esp-idf-sys 能够找到 ESP-IDF
 MCU = "esp32c3"
+
+[source.crates-io]
+replace-with = 'ustc'
+
+[source.ustc]
+registry = "sparse+https://mirrors.ustc.edu.cn/crates.io-index/"

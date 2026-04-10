@@ -2,7 +2,7 @@ set(RUST_LIB_NAME "libtarot_core_rust.a")
 
 idf_component_register(
     SRCS "dummy.c"
-    REQUIRES esp_http_server esp_wifi nvs_flash esp_netif esp_event
+    REQUIRES esp_http_server esp_wifi nvs_flash esp_netif esp_event spiffs
 )
 
 
@@ -20,6 +20,7 @@ set_property(TARGET rust_core PROPERTY INTERFACE_LINK_LIBRARIES
     idf::esp_event 
     idf::vfs 
     idf::newlib
+    idf::spiffs
 )
 
 # 将 Rust 库链接到当前组件

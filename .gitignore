@@ -1,0 +1,21 @@
+# 忽略 ESP-IDF 的构建目录
+build/
+sdkconfig.old
+sdkconfig.defaults.old
+
+# 忽略 Rust 的构建目录
+target/
+**/target/
+**/.cargo/registry/
+**/.cargo/git/
+
+# 忽略 VS Code 个人配置
+.vscode/
+
+# 忽略依赖库组件
+managed_components/
+
+# 忽略临时文件
+*.tmp
+*.log
+.DS_Store
