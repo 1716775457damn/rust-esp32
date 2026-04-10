@@ -1,0 +1,108 @@
+[0;32mI (122) esp_image: segment 1: paddr=0003cb18 vaddr=3fc932ESP-ROM:esp32c3-api1-20210207
+Build:Feb  7 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0xe (SPI_FAST_FLASH_BOOT)
+Saved PC:0x420061e2
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fcd5820,len:0x1738
+load:0x403cc710,len:0xb9c
+load:0x403ce710,len:0x2e4c
+entry 0x403cc71a
+[0;32mI (24) boot: ESP-IDF v5.3.1-dirty 2nd stage bootloader[0m
+[0;32mI (24) boot: compile time Apr 10 2026 18:55:54[0m
+[0;32mI (25) boot: chip revision: v0.4[0m
+[0;32mI (28) boot.esp32c3: SPI Speed      : 80MHz[0m
+[0;32mI (33) boot.esp32c3: SPI Mode       : DIO[0m
+[0;32mI (37) boot.esp32c3: SPI Flash Size : 4MB[0m
+[0;32mI (42) boot: Enabling RNG early entropy source...[0m
+[0;32mI (47) boot: Partition Table:[0m
+[0;32mI (51) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (58) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (66) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (73) boot:  2 factory          factory app      00 00 00010000 00177000[0m
+[0;32mI (81) boot: End of partition table[0m
+[0;32mI (85) esp_image: segment 0: paddr=00010020 vaddr=3c0e0020 size=2caf0h (183024) map[0m
+[0;32mI (122) esp_image: segment 1: paddr=0003cb18 vaddr=3fc93200 size=03408h ( 13320) load[0m
+[0;32mI (125) esp_image: segment 2: paddr=0003ff28 vaddr=40380000 size=000f0h (   240) load[0m
+[0;32mI (128) esp_image: segment 3: paddr=00040020 vaddr=42000020 size=d97ech (890860) map[0m
+[0;32mI (275) esp_image: segment 4: paddr=00119814 vaddr=403800f0 size=1308ch ( 77964) load[0m
+[0;32mI (296) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (297) boot: Disabling RNG early entropy source...[0m
+[0;32mI (308) cpu_start: Unicore app[0m
+[0;32mI (317) cpu_start: Pro cpu start user code[0m
+[0;32mI (317) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (317) app_init: Application information:[0m
+[0;32mI (320) app_init: Project name:     tarot-esp32[0m
+[0;32mI (325) app_init: App version:      0517580-dirty[0m
+[0;32mI (330) app_init: Compile time:     Apr 10 2026 18:54:45[0m
+[0;32mI (336) app_init: ELF file SHA256:  0799cd283...[0m
+[0;32mI (342) app_init: ESP-IDF:          v5.3.1-dirty[0m
+[0;32mI (347) efuse_init: Min chip rev:     v0.3[0m
+[0;32mI (352) efuse_init: Max chip rev:     v1.99 [0m
+[0;32mI (357) efuse_init: Chip rev:         v0.4[0m
+[0;32mI (361) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (369) heap_init: At 3FC9A8D0 len 00025730 (149 KiB): RAM[0m
+[0;32mI (375) heap_init: At 3FCC0000 len 0001C710 (113 KiB): Retention RAM[0m
+[0;32mI (382) heap_init: At 3FCDC710 len 00002950 (10 KiB): Retention RAM[0m
+[0;32mI (389) heap_init: At 50000200 len 00001DE8 (7 KiB): RTCRAM[0m
+[0;32mI (396) spi_flash: detected chip: generic[0m
+[0;32mI (400) spi_flash: flash io: dio[0m
+[0;33mW (404) spi_flash: Detected size(16384k) larger than the size in the binary image header(4096k). Using the size in the binary image header.[0m
+[0;33mW (417) timer_group: legacy driver is deprecated, please migrate to `driver/gptimer.h`[0m
+[0;32mI (426) sleep: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (432) sleep: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (440) main_task: Started on CPU0[0m
+[0;32mI (440) main_task: Calling app_main()[0m
+========================================
+塔罗抽卡机 Phase 2: 网络初始化启动
+========================================
+✅ Rust Core 版本: Tarot_Core_v0.2_Phase_2
+-> [C++ 调用] 启动 Wi-Fi AP 和 HTTP Server...
+[0;32mI (470) tarot_core: 正在启动 Rust AP Server...[0m
+[0;32mI (470) pp: pp rom version: 9387209[0m
+[0;32mI (470) net80211: net80211 rom version: 9387209[0m
+[0;32mI (490) wifi:wifi driver task: 3fca22b4, prio:23, stack:6656, core=0[0m
+[0;32mI (490) wifi:wifi firmware version: ccaebfa[0m
+[0;32mI (490) wifi:wifi certification version: v7.0[0m
+[0;32mI (490) wifi:config NVS flash: enabled[0m
+[0;32mI (500) wifi:config nano formating: disabled[0m
+[0;32mI (500) wifi:Init data frame dynamic rx buffer num: 32[0m
+[0;32mI (510) wifi:Init static rx mgmt buffer num: 5[0m
+[0;32mI (510) wifi:Init management short buffer num: 32[0m
+[0;32mI (510) wifi:Init dynamic tx buffer num: 32[0m
+[0;32mI (520) wifi:Init static tx FG buffer num: 2[0m
+[0;32mI (520) wifi:Init static rx buffer size: 1600[0m
+[0;32mI (530) wifi:Init static rx buffer num: 10[0m
+[0;32mI (530) wifi:Init dynamic rx buffer num: 32[0m
+[0;32mI (530) wifi_init: rx ba win: 6[0m
+[0;32mI (540) wifi_init: accept mbox: 6[0m
+[0;32mI (540) wifi_init: tcpip mbox: 32[0m
+[0;32mI (550) wifi_init: udp mbox: 6[0m
+[0;32mI (550) wifi_init: tcp mbox: 6[0m
+[0;32mI (550) wifi_init: tcp tx win: 5760[0m
+[0;32mI (560) wifi_init: tcp rx win: 5760[0m
+[0;32mI (560) wifi_init: tcp mss: 1440[0m
+[0;32mI (560) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (570) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;33mW (580) wifi:Affected by the ESP-NOW encrypt num, set the max connection num to 10[0m
+[0;32mI (580) phy_init: phy_version 1180,01f2a49,Jun  4 2024,16:34:25[0m
+[0;32mI (620) wifi:mode : softAP (b4:3a:45:4d:4d:a5)[0m
+[0;32mI (630) wifi:Total power save buffer number: 16[0m
+[0;32mI (630) wifi:Init max length of beacon: 752/752[0m
+[0;32mI (630) wifi:Init max length of beacon: 752/752[0m
+[0;32mI (630) esp_netif_lwip: DHCP server started on interface WIFI_AP_DEF with IP: 192.168.71.1[0m
+[0;32mI (640) tarot_core: Wi-Fi AP 已开启: SSID = TarotCard[0m
+[0;32mI (650) esp_idf_svc::http::server: Started Httpd server with config Configuration { http_port: 80, ctrl_port: 32768, https_port: 443, max_sessions: 16, session_timeout: 1200s, stack_size: 6144, max_open_sockets: 4, max_uri_handlers: 32, max_resp_headers: 8, lru_purge_enable: true, uri_match_wildcard: false }[0m
+[0;32mI (670) esp_idf_svc::http::server: Registered Httpd server handler Get for URI "/"[0m
+[0;32mI (680) tarot_core: HTTP 服务器已启动，监听端口 80[0m
+[0;32mI (690) wifi:flush txq[0m
+[0;32mI (690) wifi:stop sw txq[0m
+[0;32mI (690) wifi:lmac stop hw txq[0m
+[0;32mI (700) esp_idf_svc::wifi: EspWifi dropped[0m
+[0;32mI (700) esp_idf_svc::netif: Dropped[0m
+[0;32mI (700) esp_idf_svc::netif: Dropped[0m
+[0;32mI (710) wifi:Deinit lldesc rx mblock:10[0m
+[0;32mI (720) esp_idf_svc::eventloop: System event loop dropped[0m
+[0;32mI (720) esp_idf_svc::nvs: NvsDefault dropped[0m
+I BOD: Brownout detector was triggered
+

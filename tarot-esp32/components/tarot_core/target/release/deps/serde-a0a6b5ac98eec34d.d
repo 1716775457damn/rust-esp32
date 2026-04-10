@@ -1,0 +1,14 @@
+E:\GitHub\rust-esp32\tarot-esp32\components\tarot_core\target\release\deps\serde-a0a6b5ac98eec34d.d: C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs E:\GitHub\rust-esp32\tarot-esp32\components\tarot_core\target\release\build\serde-e1091bd00740f5f6\out/private.rs
+
+E:\GitHub\rust-esp32\tarot-esp32\components\tarot_core\target\release\deps\libserde-a0a6b5ac98eec34d.rlib: C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs E:\GitHub\rust-esp32\tarot-esp32\components\tarot_core\target\release\build\serde-e1091bd00740f5f6\out/private.rs
+
+E:\GitHub\rust-esp32\tarot-esp32\components\tarot_core\target\release\deps\libserde-a0a6b5ac98eec34d.rmeta: C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs E:\GitHub\rust-esp32\tarot-esp32\components\tarot_core\target\release\build\serde-e1091bd00740f5f6\out/private.rs
+
+C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\UserX\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+E:\GitHub\rust-esp32\tarot-esp32\components\tarot_core\target\release\build\serde-e1091bd00740f5f6\out/private.rs:
+
+# env-dep:OUT_DIR=E:\\GitHub\\rust-esp32\\tarot-esp32\\components\\tarot_core\\target\\release\\build\\serde-e1091bd00740f5f6\\out

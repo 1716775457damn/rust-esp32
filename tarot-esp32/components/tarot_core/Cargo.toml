@@ -1,0 +1,29 @@
+[package]
+name = "tarot_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "tarot_core"
+# 编译为静态库，供 C++ CMake 链接
+crate-type = ["staticlib"]
+
+[dependencies]
+# ESP-IDF 系统服务 (WiFi, HTTP, Logging 等)
+esp-idf-svc = { version = "0.50", default-features = false, features = ["critical-section", "std", "alloc"] }
+esp-idf-hal = { version = "0.45", default-features = false }
+embedded-svc = "0.28"
+anyhow = "1.0"
+log = "0.4"
+# 显式声明 esp-idf-sys，并禁用所有默认特性（特别是 binstart），防止生成多余的 app_main
+esp-idf-sys = { version = "0.36", default-features = false, features = ["std", "native"] }
+
+[package.metadata.esp-idf-sys]
+esp_idf_tools_install_dir = "from_env"
+esp_idf_sdkconfig_defaults = ["sdkconfig.defaults"]
+
+[profile.dev]
+panic = "unwind" # std 下可以使用 unwind
+
+[profile.release]
+panic = "abort"

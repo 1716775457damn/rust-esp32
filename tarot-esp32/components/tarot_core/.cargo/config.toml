@@ -1,0 +1,12 @@
+[target.riscv32imc-esp-espidf]
+linker = "riscv32-esp-elf-gcc"
+
+[build]
+target = "riscv32imc-esp-espidf"
+
+[unstable]
+build-std = ["std", "panic_abort"]
+
+[env]
+# 确保 esp-idf-sys 能够找到 ESP-IDF
+MCU = "esp32c3"
