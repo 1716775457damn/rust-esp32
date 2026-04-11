@@ -136,8 +136,8 @@ void bsp_display_init() {
     esp_lcd_panel_io_spi_config_t io_config = { };
     io_config.cs_gpio_num = PIN_LCD_CS;
     io_config.dc_gpio_num = 0;
-    io_config.spi_mode = 0; // 对齐小智项目：使用 Mode 0
-    io_config.pclk_hz = 20 * 1000 * 1000; // 对齐小智项目：提升至 20MHz (参考值为 40MHz)
+    io_config.spi_mode = 0; 
+    io_config.pclk_hz = 15 * 1000 * 1000; // 降低至 15MHz 以平衡画质与功耗 (减少 BOD 触发)
     io_config.trans_queue_depth = 10;
     io_config.on_color_trans_done = notify_lvgl_flush_ready;
     io_config.user_ctx = &disp_drv;
@@ -217,7 +217,8 @@ static void anim_opa_cb(void * var, int32_t v) {
 }
 
 // --- Phase 5: 从 SPIFFS 加载并显示图片 ---
-void DisplayCardFromSpiffs(int slot_id) {
+// --- Phase 5: 从 SPIFFS 加载并显示图片 ---
+static void DisplayCardFromSpiffs(int slot_id) {
     char filename[64];
     // 根据 Rust 端的解码逻辑，文件名应为 /spiffs/tarot_0.rgb565
     sprintf(filename, "/spiffs/tarot_%d.rgb565", slot_id);
@@ -234,8 +235,8 @@ void DisplayCardFromSpiffs(int slot_id) {
     fseek(f, 0, SEEK_SET);
     ESP_LOGI(TAG, "开始渲染图片: %s (大小: %ld)", filename, size);
 
-    // 采用分块渲染模式，每次处理 20 行像素 (360 * 20 * 2 = 14400 字节)
-    const int lines_per_chunk = 20;
+    // 采用分块渲染模式，每次处理 10 行像素以更精细地控制电流
+    const int lines_per_chunk = 10;
     const int chunk_size = LCD_H_RES * lines_per_chunk * 2;
     uint8_t* chunk_buf = (uint8_t*)heap_caps_malloc(chunk_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     
@@ -255,13 +256,10 @@ void DisplayCardFromSpiffs(int slot_id) {
             break;
         }
         
-        // 硬件驱动限制：必须确保 y + actual_lines 不超过 H_RES
-        if (y + actual_lines > LCD_V_RES) {
-            actual_lines = LCD_V_RES - y;
-            if (actual_lines <= 0) break;
-        }
-        
         esp_lcd_panel_draw_bitmap(panel_handle, 0, y, LCD_H_RES, y + actual_lines, chunk_buf);
+        
+        // 关键：加入节奏控制，防止瞬时电流过大触发 BOD，同时让图片像帘幕一样平滑展开
+        vTaskDelay(pdMS_TO_TICKS(12));
     }
     
     // 分阶段开启背光以降低瞬间峰值电流
@@ -330,9 +328,10 @@ void app_main(void)
 }
 
 // Rust 通过 FFI 调用此函数
+// Rust 通过 FFI 调用此函数
 extern "C" void cpp_notify_card_ready(int slot_id) {
     ESP_LOGI(TAG, "收到 Rust 通知: 卡片已就绪 (Slot %d)", slot_id);
     
-    // 调用 Phase 5 的显示逻辑
-    DisplayCardFromSpiffs(slot_id);
+    // 3. 进入 Phase 5: 开启卡片显示流程
+    DisplayCardFromSpiffs(slot_id); 
 }

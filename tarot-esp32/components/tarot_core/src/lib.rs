@@ -195,7 +195,7 @@ fn start_services() -> Result<()> {
         };
 
         // 3. 执行解码逻辑 (复用 slot 0 作为当前显示槽位)
-        if let Err(e) = decode_jpeg_to_rgb565(&jpeg_data, 0) {
+        if let Err(e) = decode_jpeg_to_rgb565(&jpeg_data, 0, random_idx as i32) {
             info!("解码失败: {:?}", e);
             let _ = req.into_status_response(500).and_then(|mut r| r.write_all(b"Decode Error"));
         } else {
@@ -216,7 +216,7 @@ fn start_services() -> Result<()> {
             jpeg_data.extend_from_slice(&buf[..bytes_read]);
         }
         
-        if let Err(e) = decode_jpeg_to_rgb565(&jpeg_data, 0) {
+        if let Err(_e) = decode_jpeg_to_rgb565(&jpeg_data, 0, 0) {
             let _ = req.into_status_response(500).and_then(|mut r| r.write_all(b"Error"));
         } else {
             let _ = req.into_ok_response().and_then(|mut r| r.write_all(b"OK"));
@@ -235,10 +235,30 @@ fn start_services() -> Result<()> {
 }
 
 /// 核心解码逻辑：将内存中的 JPEG 解码到 SPIFFS 文件
-fn decode_jpeg_to_rgb565(jpeg_data: &[u8], slot_id: i32) -> Result<()> {
+fn decode_jpeg_to_rgb565(jpeg_data: &[u8], slot_id: i32, card_idx: i32) -> Result<()> {
     use tjpgdec_rs::{JpegDecoder, MemoryPool};
-    use std::io::Write;
+    use std::io::{Write, BufRead, BufReader};
 
+    // 1. 获取卡片名称 (从 names.txt)
+    let mut card_name = "Unknown".to_string();
+    if let Ok(file) = std::fs::File::open("/spiffs/names.txt") {
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let parts: Vec<&str> = l.split(':').collect();
+                if parts.len() >= 2 && parts[0] == card_idx.to_string() {
+                    card_name = parts[1].to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    // 2. 随机生成正/逆位状态 (50/50 概率)
+    let is_reversed = unsafe { (esp_idf_sys::esp_random() % 100) < 50 };
+    info!("抽卡状态: {} ({})", card_name, if is_reversed { "逆位" } else { "正位" });
+
+    // 3. 执行解码
     let mut pool_buffer = vec![0u8; 4096]; 
     let mut pool = MemoryPool::new(&mut pool_buffer);
     let mut decoder = JpegDecoder::new();
@@ -246,7 +266,7 @@ fn decode_jpeg_to_rgb565(jpeg_data: &[u8], slot_id: i32) -> Result<()> {
     decoder.prepare(jpeg_data, &mut pool).map_err(|e| anyhow::anyhow!("JPEG Prepare Error: {:?}", e))?;
     
     let width = decoder.width();
-    let rgb_path = format!("/spiffs/tarot_{}.rgb565", slot_id); // 统一后缀
+    let rgb_path = format!("/spiffs/tarot_{}.rgb565", slot_id);
     let mut rgb_file = std::fs::File::create(&rgb_path)?;
 
     let mut line_buffer = vec![0u8; width as usize * 16 * 2];

@@ -1,7 +1,7 @@
 {
     "version":            "1.1",
     "project_name":       "tarot-esp32",
-    "project_version":    "cb4daf1-dirty",
+    "project_version":    "1c45091-dirty",
     "project_path":       "E:/GitHub/rust-esp32/tarot-esp32",
     "idf_path":           "F:/Espressif/frameworks/esp-idf-v5.3.1",
     "build_dir":          "E:/GitHub/rust-esp32/tarot-esp32/build",
