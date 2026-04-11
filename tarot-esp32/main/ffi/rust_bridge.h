@@ -14,6 +14,9 @@ const char* rust_get_version(void);
 // AP & HTTP 服务器启动
 void rust_start_ap_server(void);
 
+// 播放声音
+void rust_play_sound(const char* type);
+
 #ifdef __cplusplus
     // C++ functions called by Rust
     void cpp_notify_card_ready(int slot_id);

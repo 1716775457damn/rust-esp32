@@ -10,6 +10,12 @@ use log::info;
 // 保证服务器对象不被销毁
 static mut SERVER: Option<EspHttpServer<'static>> = None;
 
+// C++ FFI 函数
+extern "C" {
+    fn cpp_notify_card_ready(slot_id: i32);
+    fn rust_play_sound(sound_type: *const std::os::raw::c_char);
+}
+
 /// Phase 2: 启动 AP 热点和 HTTP 服务器
 #[no_mangle]
 pub extern "C" fn rust_start_ap_server() {
@@ -131,6 +137,30 @@ fn start_services() -> Result<()> {
                     font-weight: 300;
                     letter-spacing: 1px;
                     min-height: 20px;
+                    color: #ffd700;
+                }
+                .card-result {
+                    margin-top: 30px;
+                    padding: 20px;
+                    background: rgba(107, 76, 154, 0.2);
+                    border-radius: 15px;
+                    border: 1px solid rgba(107, 76, 154, 0.3);
+                    display: none;
+                    animation: fadeIn 0.8s ease-out;
+                }
+                @keyframes fadeIn {
+                    from { opacity: 0; transform: translateY(10px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+                .card-name {
+                    font-size: 1.5rem;
+                    color: #ffd700;
+                    margin-bottom: 10px;
+                }
+                .card-desc {
+                    font-size: 0.9rem;
+                    line-height: 1.6;
+                    color: #e0d0ff;
                 }
             </style>
         </head>
@@ -139,29 +169,33 @@ fn start_services() -> Result<()> {
                 <h1>Tarot Machine</h1>
                 <button onclick="drawCard()">Draw a Card</button>
                 <div id="status">Ready to see your destiny...</div>
+                <div id="result" class="card-result">
+                    <div class="card-name" id="cardName"></div>
+                    <div class="card-desc">The stars have chosen this card for you. Observe its image on the device for deeper wisdom.</div>
+                </div>
             </div>
             <script>
                 function drawCard() {
                     const btn = document.querySelector('button');
                     const status = document.getElementById('status');
+                    const result = document.getElementById('result');
+                    const cardName = document.getElementById('cardName');
+                    
                     btn.disabled = true;
-                    status.style.color = "#ffd700";
                     status.innerText = "Consulting the stars...";
+                    result.style.display = "none";
                     
                     fetch('/draw')
-                        .then(r => r.text())
-                        .then(t => {
-                            status.style.color = "#00ffcc";
-                            status.innerText = "Your card is revealed on the device!";
-                            setTimeout(() => {
-                                btn.disabled = false;
-                                status.style.color = "#e0d0ff";
-                                status.innerText = "Ready for another draw.";
-                            }, 4000);
+                        .then(r => r.json())
+                        .then(data => {
+                            status.innerText = "Your destiny is revealed!";
+                            cardName.innerText = data.name;
+                            result.style.display = "block";
+                            btn.disabled = false;
                         })
                         .catch(e => {
                             status.style.color = "#ff4d4d";
-                            status.innerText = "Connection lost. Try again.";
+                            status.innerText = "The connection is weak. Try again.";
                             btn.disabled = false;
                         });
                 }
@@ -177,6 +211,9 @@ fn start_services() -> Result<()> {
     // GET /draw : 随机抽牌并解码显示
     server.fn_handler("/draw", Method::Get, |req| {
         info!("收到随机抽牌指令...");
+        unsafe {
+            rust_play_sound(std::ffi::CString::new("shuffle").unwrap().as_ptr());
+        }
         
         // 1. 生成随机索引 (0-94)
         let random_idx = unsafe { esp_idf_sys::esp_random() % 95 };
@@ -194,13 +231,22 @@ fn start_services() -> Result<()> {
             }
         };
 
-        // 3. 执行解码逻辑 (复用 slot 0 作为当前显示槽位)
+        // 3. 执行解码逻辑
         if let Err(e) = decode_jpeg_to_rgb565(&jpeg_data, 0, random_idx as i32) {
             info!("解码失败: {:?}", e);
             let _ = req.into_status_response(500).and_then(|mut r| r.write_all(b"Decode Error"));
         } else {
-            info!("✅ 抽牌显示成功 (Index: {})", random_idx);
-            let _ = req.into_ok_response().and_then(|mut r| r.write_all(format!("OK:{}", random_idx).as_bytes()));
+            unsafe {
+                rust_play_sound(std::ffi::CString::new("draw").unwrap().as_ptr());
+            }
+            // 获取牌名并返回 JSON
+            let card_name = get_card_name(random_idx as i32);
+            let json_resp = format!(r#"{{"index": {}, "name": "{}"}}"#, random_idx, card_name);
+            
+            let mut resp = req.into_response(200, None, &[("Content-Type", "application/json")])?;
+            resp.write_all(json_resp.as_bytes())?;
+            
+            unsafe { cpp_notify_card_ready(0); }
         }
         
         Ok::<(), anyhow::Error>(())
@@ -304,10 +350,6 @@ fn decode_jpeg_to_rgb565(jpeg_data: &[u8], slot_id: i32, card_idx: i32) -> Resul
 
     rgb_file.write_all(&line_buffer)?;
     
-    // 通知 C++
-    extern "C" { fn cpp_notify_card_ready(slot_id: i32); }
-    unsafe { cpp_notify_card_ready(slot_id); }
-    
     Ok(())
 }
 
@@ -316,4 +358,24 @@ fn decode_jpeg_to_rgb565(jpeg_data: &[u8], slot_id: i32, card_idx: i32) -> Resul
 pub extern "C" fn rust_get_version() -> *const u8 {
     let version = b"Tarot_Core_v0.6_LocalDraw\0";
     version.as_ptr()
+}
+
+fn get_card_name(idx: i32) -> String {
+    use std::io::{BufRead, BufReader};
+    if let Ok(file) = std::fs::File::open("/spiffs/names.txt") {
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            if let Ok(l) = line {
+                let parts: Vec<&str> = l.split(':').collect();
+                if parts.len() >= 2 {
+                    if let Ok(line_idx) = parts[0].parse::<i32>() {
+                        if line_idx == idx {
+                            return parts[1].to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    format!("Card #{}", idx)
 }

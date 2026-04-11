@@ -1,146 +1,60 @@
-# 硬件配置文档
+# 🔮 Tarot ESP32 硬件规格书 (Xiaozhi PANBOPO 版)
 
-## 主控芯片
-
-- **芯片型号**：ESP32-C3
-- **开发框架**：ESP-IDF 5.3.1
-- **编程语言**：Rust / C++ (Hybrid)
+本规格书已根据 `F:\xiaozhi-esp32-1.8.8` (小智面板项目) 的 `PANBOPO` 开发板配置文件进行了完整同步。
 
 ---
 
-## 显示屏
-
-| 参数 | 值 |
-|------|-----|
-| 型号 | EPI1831T |
-| 尺寸 | 1.8 寸圆屏 |
-| 分辨率 | 360 × 360 |
-| 接口 | QSPI（四线 SPI） |
-| 驱动芯片 | ST77916 |
-| 触摸 | 无 |
-
-> 注：ST77916 使用 QSPI 接口（quad_mode = 1），lcd_cmd_bits = 32，初始化时需先以低速（3MHz）读取寄存器 0x04 判断版本，再切换到高速（80MHz）正式通信。
+## 1. 核心 MCU
+- **芯片**: ESP32-C3 (RISC-V)
+- **Flash**: 16MB
+- **PSRAM**: 无 (依靠 400KB 内置 RAM)
 
 ---
 
-## 音频
+## 2. 显示系统 (ST77916 圆屏)
+| 信号 | GPIO | 说明 |
+|------|------|------|
+| **SPI SCLK** | **GPIO 1** | 时钟线 |
+| **SPI MOSI** | **GPIO 2** | 数据线 (Standard SPI) |
+| **LCD DC** | **GPIO 0** | 命令/数据切换 |
+| **LCD CS** | **GPIO 21** | 片选 |
+| **LCD BL** | **GPIO 20** | 背光控制 (PWM) |
+| **LCD RST** | **-** | 无直接引脚，使用软件复位指令 (0x01) |
 
-### 功放控制
-| 参数 | 值 |
-|------|-----|
-| 功放使能引脚 | GPIO11 |
-| 使能电平 | 高电平（1）= 失能，低电平（0）= 使能 |
-| 备注 | GPIO11 通过 `esp_efuse_write_field_bit(ESP_EFUSE_VDD_SPI_AS_GPIO)` 复用为普通 GPIO |
-
-### 扬声器 I2S（MAX98357A）
-| 信号 | GPIO |
-|------|------|
-| BCLK | GPIO5 |
-| LRCLK | GPIO4 |
-| DATA | GPIO6 |
-| SD_MODE（使能） | GPIO45 |
-
-### 麦克风 I2S（MSM261）
-| 信号 | GPIO |
-|------|------|
-| BCLK | GPIO7 |
-| WS | GPIO9 |
-| DATA | GPIO8 |
+- **面板特性**: 360x360 圆形屏。
+- **驱动模式**: Standard SPI, 8-bit CMD/Param。
+- **色彩模式**: RGB565 (Inverted)。
 
 ---
 
-## UART 外设
+## 3. 音频系统 (MAX98357A & Mic)
+| 信号 | GPIO | 说明 |
+|------|------|------|
+| **I2S BCLK** | **GPIO 8** | 位时钟 |
+| **I2S WS (LRC)** | **GPIO 6** | 左右声道切换 |
+| **I2S DOUT** | **GPIO 5** | 音频输出 (连接 MAX98357A DIN) |
+| **I2S DIN** | **GPIO 7** | 音频输入 (连接麦克风 DATA) |
+| **I2S MCLK** | **GPIO 10** | 主时钟 (可选) |
 
-### UART1 — YT2228 蓝牙/语音模块
-| 参数 | 值 |
-|------|-----|
-| 端口 | UART_NUM_1 |
-| RX | GPIO13 |
-| TX | GPIO12 |
-| 缓冲区 | 512 字节 |
-
-支持指令枚举：
-- 唤醒小智、进入配网、唤醒词模式/结束/中止
-- 蓝牙模式开关、蓝牙音乐播放控制（暂停/继续/上一首/下一首）
-- 音量增减/最大/最小
-- 蓝牙已连接/断开
-
-### UART0 — PFS123 低电量检测
-| 参数 | 值 |
-|------|-----|
-| 端口 | UART_NUM_0 |
-| RX | GPIO9 |
-| 缓冲区 | 512 字节 |
+- **功放使能**: GPIO 11 (需 eFuse 复用，默认建议拉低)。
 
 ---
 
-## SPI 显示引脚（EPI1831T ST77916 QSPI）
-
-| 信号 | GPIO |
-|------|------|
-| SCLK | GPIO1 |
-| MOSI（DATA0） | GPIO2 |
-| DC | GPIO0 |
-| CS | GPIO21 |
-| RST | 无（-1，通过 TCA9554 IO 扩展器复位） |
-| 背关（BL） | GPIO20 |
-
-
-> 注：已通过 Xiaozhi-C3 参考项目校对。ST77916 QSPI 模式下 CS 引脚必须独立。
-
-## 按钮
-
-| 按钮 | GPIO |
-|------|------|
-| BOOT 按钮 | GPIO9 |
+## 4. 控制与通信
+| 信号 | GPIO | 说明 |
+|------|------|------|
+| **I2C SDA** | **GPIO 3** | 传感器/扩展 IO 数据线 |
+| **I2C SCL** | **GPIO 4** | 传感器/扩展 IO 时钟线 |
+| **BOOT 按钮** | **GPIO 9** | 兼做功能按键 |
+| **UART TX** | **GPIO 13** | UART1 (蓝牙/外部通信) |
+| **UART RX** | **GPIO 12** | UART1 (蓝牙/外部通信) |
 
 ---
 
-## LED
-
-| 类型 | GPIO |
-|------|------|
-| WS2812B DATA | GPIO2 |
-
----
-
-## 旋转编码器（Knob）
-
-| 信号 | GPIO |
-|------|------|
-| DATA_A | GPIO0 |
-| DATA_B | GPIO1 |
+## 5. 软件适配说明
+- **SPI 频率**: 推荐 `15MHz` (稳定画质) 或 `40MHz` (极限速度)。
+- **I2S 采样率**: 推荐 `24000Hz` 或 `16000Hz` (16-bit Mono)。
+- **I2C 速率**: 标准 `100KHz` 或 `400KHz`。
 
 ---
-
-## 音频采样率
-
-| 参数 | 值 |
-|------|-----|
-| 输入采样率 | 24000 Hz |
-| 输出采样率 | 24000 Hz |
-| 音频编解码 | OPUS（60ms 帧） |
-
----
-
-## 分区表（参考）
-
-```
-nvs,      data, nvs,     0x9000,   0x5000
-phy_init, data, phy,     0xF000,   0x1000
-factory,  app,  factory, 0x10000,  0x400000   # 4MB 固件
-spiffs,   data, spiffs,  0x410000, 0xA00000   # 10MB 图片存储
-```
-
----
-
-## 备注
-
-- GPIO11 需通过 eFuse 将 VDD_SPI 复用为普通 GPIO，**烧录一次不可逆**，操作前确认硬件支持
-- EPI1831T 为圆形屏，LVGL 显示时建议配合圆形裁剪（`lv_obj_set_style_clip_corner`）避免四角显示异常
-- 无触摸屏，交互依赖 BOOT 按钮（GPIO0）或旋转编码器（GPIO47/48）
-- ST77916 驱动需使用 QSPI 模式（`quad_mode = 1`），`lcd_cmd_bits = 32`，`lcd_param_bits = 8`
-- ST77916 初始化须先以 3MHz 低速读取寄存器 0x04 判断屏幕版本，再切换到 80MHz 高速模式
-- **Rust 编译路径限制**：`esp-idf-sys` 要求项目路径 ≤ 10 字符，Windows 下必须在 `C:\r` 等极短路径下编译 Rust 组件，`subst` 命令无效
-- **Rust 环境变量**：每次编译前需执行 `& '%USERPROFILE%\export-esp.ps1'` 设置 `LIBCLANG_PATH` 和 `PATH`
-- **源码同步**：修改 `tarot-esp32/components/tarot_core/` 下的 Rust 源码后，需 `xcopy` 同步到 `C:\r` 再执行 `cargo +esp check --target xtensa-esp32s3-espidf`
+*注：文档内容已校对至小智 1.8.8 源码库。关键引脚若有变动，请优先参考此文档。*
