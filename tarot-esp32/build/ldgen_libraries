@@ -76,4 +76,7 @@ E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/nvs_sec_provider/libnvs_sec_provi
 E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/spiffs/libspiffs.a
 E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/wifi_provisioning/libwifi_provisioning.a
 E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/tarot_core/libtarot_core.a
+E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/lvgl__lvgl/liblvgl__lvgl.a
+E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/espressif__esp_lcd_st77916/libespressif__esp_lcd_st77916.a
+E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/espressif__esp_lcd_gc9a01/libespressif__esp_lcd_gc9a01.a
 E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/main/libmain.a

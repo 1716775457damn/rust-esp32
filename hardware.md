@@ -2,9 +2,9 @@
 
 ## 主控芯片
 
-- **芯片型号**：ESP32-S3
-- **开发框架**：ESP-IDF 5.4+
-- **编程语言**：C++
+- **芯片型号**：ESP32-C3
+- **开发框架**：ESP-IDF 5.3.1
+- **编程语言**：Rust / C++ (Hybrid)
 
 ---
 
@@ -78,22 +78,21 @@
 
 | 信号 | GPIO |
 |------|------|
-| DATA0（MOSI） | GPIO17 |
-| DATA1 | GPIO15 |
-| DATA2 | GPIO16 |
-| DATA3 | GPIO13 |
-| SCLK | GPIO18 |
-| CS | GPIO12 |
+| SCLK | GPIO1 |
+| MOSI（DATA0） | GPIO2 |
+| DC | GPIO0 |
+| CS | GPIO21 |
 | RST | 无（-1，通过 TCA9554 IO 扩展器复位） |
-| 背光（BL） | GPIO18 |
+| 背关（BL） | GPIO20 |
 
-> 注：待确认实际接线后更新此表。ST77916 QSPI 模式下 CS 引脚必须独立，不能与其他 SPI 设备共用。
+
+> 注：已通过 Xiaozhi-C3 参考项目校对。ST77916 QSPI 模式下 CS 引脚必须独立。
 
 ## 按钮
 
 | 按钮 | GPIO |
 |------|------|
-| BOOT 按钮 | GPIO0 |
+| BOOT 按钮 | GPIO9 |
 
 ---
 
@@ -101,8 +100,7 @@
 
 | 类型 | GPIO |
 |------|------|
-| APA102 DATA | GPIO38 |
-| APA102 CLOCK | GPIO39 |
+| WS2812B DATA | GPIO2 |
 
 ---
 
@@ -110,8 +108,8 @@
 
 | 信号 | GPIO |
 |------|------|
-| DATA_A | GPIO47 |
-| DATA_B | GPIO48 |
+| DATA_A | GPIO0 |
+| DATA_B | GPIO1 |
 
 ---
 
@@ -130,8 +128,8 @@
 ```
 nvs,      data, nvs,     0x9000,   0x5000
 phy_init, data, phy,     0xF000,   0x1000
-factory,  app,  factory, 0x10000,  0x200000   # 2MB 固件
-spiffs,   data, spiffs,  0x210000, 0x1F0000   # ~2MB 图片存储
+factory,  app,  factory, 0x10000,  0x400000   # 4MB 固件
+spiffs,   data, spiffs,  0x410000, 0xA00000   # 10MB 图片存储
 ```
 
 ---

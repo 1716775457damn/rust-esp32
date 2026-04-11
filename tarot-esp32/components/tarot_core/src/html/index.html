@@ -114,11 +114,45 @@
             pointer-events: none;
             z-index: 100;
         }
+        .control-panel {
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .draw-button {
+            background: linear-gradient(135deg, #d4af37 0%, #a67c00 100%);
+            border: none;
+            color: black;
+            padding: 15px 40px;
+            font-size: 20px;
+            font-weight: bold;
+            border-radius: 30px;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(212, 175, 55, 0.4);
+            transition: all 0.3s ease;
+        }
+        .draw-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 30px rgba(212, 175, 55, 0.6);
+        }
+        .draw-button:active {
+            transform: scale(0.95);
+        }
+        .active-name {
+            margin-top: 15px;
+            font-style: italic;
+            color: var(--accent);
+            font-size: 18px;
+        }
     </style>
 </head>
 <body>
-    <h1>Tarot Deck Uploader</h1>
-    <p>Select a slot to upload to ESP32 (Max 360x360 JPEG).</p>
+    <h1>Oracle Tarot Deck</h1>
+    <p>Connect with the cards. Tap to draw or upload new art.</p>
+
+    <div class="control-panel">
+        <button id="drawBtn" class="draw-button">✨ Draw Random Card ✨</button>
+        <div id="active-card-name" class="active-name">Ready to draw...</div>
+    </div>
 
     <div class="grid-container" id="grid">
         <!-- Slots will be generated here by JS -->
@@ -142,140 +176,55 @@
         ];
 
         const grid = document.getElementById('grid');
-        const fileInput = document.getElementById('fileInput');
-        let currentSlot = null;
-
-        // Initialize Grid
-        for (let i = 0; i < MAX_CARDS; i++) {
+        
+        // Initialize Grid (Read-only view for local assets)
+        for (let i = 0; i < MAJOR_ARCANA.length; i++) {
             let slot = document.createElement('div');
             slot.className = 'card-slot';
-            slot.setAttribute('data-id', i);
-            
-            let name = MAJOR_ARCANA[i] ? MAJOR_ARCANA[i] : `Card ${i}`;
-            
             slot.innerHTML = `
                 <div class="slot-id">${i}</div>
-                <div class="slot-title">${name}</div>
-                <div class="slot-status" id="status-${i}">Empty</div>
+                <div class="slot-title">${MAJOR_ARCANA[i]}</div>
             `;
-            
-            // Check if card exists in localStorage as a quick cache (optional)
-            if(localStorage.getItem('card_'+i)) {
-                setStatus(slot, i, 'Loaded');
-            }
-
-            slot.addEventListener('click', () => {
-                currentSlot = i;
-                fileInput.click();
-            });
-            
             grid.appendChild(slot);
         }
 
-        // Handle File Selection
-        fileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
-            
-            const statusBadge = document.getElementById(`status-${currentSlot}`);
-            statusBadge.innerText = "Processing...";
-            statusBadge.style.color = "var(--accent)";
-            
-            processImage(file, (blob, dataUrl) => {
-                uploadImage(currentSlot, blob, dataUrl);
-            });
-            
-            // Reset input
-            fileInput.value = '';
-        });
-
-        // Resize & Crop Image using Canvas offscreen
-        function processImage(file, callback) {
-            const reader = new FileReader();
-            reader.onload = function(event) {
-                const img = new Image();
-                img.onload = function() {
-                    const canvas = document.createElement('canvas');
-                    canvas.width = TARGET_SIZE;
-                    canvas.height = TARGET_SIZE;
-                    const ctx = canvas.getContext('2d');
-                    
-                    // Simple cover cropping
-                    let srcWidth = img.width;
-                    let srcHeight = img.height;
-                    let scale = Math.max(TARGET_SIZE / srcWidth, TARGET_SIZE / srcHeight);
-                    
-                    let dx = (TARGET_SIZE - srcWidth * scale) / 2;
-                    let dy = (TARGET_SIZE - srcHeight * scale) / 2;
-                    
-                    ctx.fillStyle = '#000';
-                    ctx.fillRect(0, 0, TARGET_SIZE, TARGET_SIZE);
-                    ctx.drawImage(img, dx, dy, srcWidth * scale, srcHeight * scale);
-                    
-                    // Convert to high quality JPEG
-                    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-                    canvas.toBlob((blob) => {
-                        callback(blob, dataUrl);
-                    }, 'image/jpeg', 0.85);
-                };
-                img.src = event.target.result;
-            };
-            reader.readAsDataURL(file);
-        }
-
-        // Upload to ESP32
-        function uploadImage(slotId, blob, dataUrl) {
-            const statusBadge = document.getElementById(`status-${slotId}`);
-            statusBadge.innerText = "Uploading...";
-            
-            fetch(`/upload?slot=${slotId}`, {
-                method: 'POST',
-                body: blob,
-                headers: {
-                    'Content-Type': 'application/octet-stream'
-                }
-            })
-            .then(response => {
-                if(response.ok) {
-                    const slotNode = grid.children[slotId];
-                    setStatus(slotNode, slotId, 'Uploaded!');
-                    
-                    // Set preview background
-                    let existingPreview = slotNode.querySelector('img.preview');
-                    if(!existingPreview) {
-                        existingPreview = document.createElement('img');
-                        existingPreview.className = 'preview';
-                        slotNode.appendChild(existingPreview);
-                    }
-                    existingPreview.src = dataUrl;
-                    
-                    // Cache
-                    localStorage.setItem('card_'+slotId, 'true');
-                    showToast(`Card ${slotId} saved!`);
-                } else {
-                    throw new Error('Server returned ' + response.status);
-                }
-            })
-            .catch(error => {
-                console.error('Upload failed:', error);
-                statusBadge.innerText = "Failed";
-                statusBadge.style.color = "red";
-                statusBadge.style.border = "1px solid red";
-            });
-        }
-        
-        function setStatus(node, id, text) {
-            const badge = node.querySelector('.slot-status');
-            badge.innerText = text;
-            badge.className = 'slot-status loaded';
-        }
-        
         function showToast(msg) {
             const t = document.getElementById('toast');
             t.innerText = msg;
             t.style.opacity = 1;
             setTimeout(() => { t.style.opacity = 0; }, 3000);
         }
+
+        // Draw Card Logic
+        const drawBtn = document.getElementById('drawBtn');
+        const activeName = document.getElementById('active-card-name');
+        
+        drawBtn.addEventListener('click', () => {
+            drawBtn.disabled = true;
+            drawBtn.innerText = "Drawing...";
+            activeName.innerText = "Connecting to the fates...";
+            
+            fetch('/draw')
+            .then(r => r.text())
+            .then(res => {
+                if(res.startsWith("OK:")) {
+                    const idx = res.split(':')[1];
+                    const name = MAJOR_ARCANA[idx] || `Card ${idx}`;
+                    activeName.innerText = `Current Revelation: ${name}`;
+                    showToast(`✨ The Oracle reveals: ${name}`);
+                } else {
+                    throw new Error(res);
+                }
+            })
+            .catch(e => {
+                showToast("Draw Failed: " + e);
+                activeName.innerText = "The connection was severed.";
+            })
+            .finally(() => {
+                drawBtn.disabled = false;
+                drawBtn.innerText = "✨ Draw Random Card ✨";
+            });
+        });
     </script>
 </body>
 </html>

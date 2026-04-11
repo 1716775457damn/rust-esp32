@@ -76,4 +76,7 @@ $<TARGET_FILE:__idf_nvs_sec_provider>
 $<TARGET_FILE:__idf_spiffs>
 $<TARGET_FILE:__idf_wifi_provisioning>
 $<TARGET_FILE:__idf_tarot_core>
+$<TARGET_FILE:__idf_lvgl__lvgl>
+$<TARGET_FILE:__idf_espressif__esp_lcd_st77916>
+$<TARGET_FILE:__idf_espressif__esp_lcd_gc9a01>
 $<TARGET_FILE:__idf_main>

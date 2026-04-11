@@ -539,6 +539,26 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
+  include("E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/lvgl__lvgl/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/espressif__cmake_utilities/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/espressif__esp_lcd_st77916/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/espressif__esp_lcd_gc9a01/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
   include("E:/GitHub/rust-esp32/tarot-esp32/build/esp-idf/main/cmake_install.cmake")
 endif()
 

@@ -2,3 +2,4 @@
 0x0 bootloader/bootloader.bin
 0x10000 tarot-esp32.bin
 0x8000 partition_table/partition-table.bin
+0x410000 spiffs.bin

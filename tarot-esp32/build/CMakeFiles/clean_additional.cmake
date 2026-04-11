@@ -17,6 +17,7 @@ if("${CONFIG}" STREQUAL "" OR "${CONFIG}" STREQUAL "")
   "ldgen_libraries"
   "ldgen_libraries.in"
   "project_elf_src_esp32c3.c"
+  "spiffs.bin"
   "tarot-esp32.bin"
   "tarot-esp32.map"
   "x509_crt_bundle.S"

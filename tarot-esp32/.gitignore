@@ -1,0 +1,25 @@
+# ESP-IDF
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Rust
+target/
+Cargo.lock.log
+components/tarot_core/target/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local Assets (Optional: remove if you want to commit generated Tarot cards)
+spiffs_data/tarot_*.rgb565
+
+# VS Code / IDE
+.vscode/
+.clangd/
+.factorypath
+.project
+.settings/

@@ -15,6 +15,8 @@ const char* rust_get_version(void);
 void rust_start_ap_server(void);
 
 #ifdef __cplusplus
+    // C++ functions called by Rust
+    void cpp_notify_card_ready(int slot_id);
 }
 #endif
 
