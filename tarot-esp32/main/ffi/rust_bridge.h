@@ -8,13 +8,13 @@
 extern "C" {
 #endif
 
-// Rust 导出的获取版本号的函数 (用于 Phase 1 测试 FFI)
+// Get Rust Core version string
 const char* rust_get_version(void);
 
-// AP & HTTP 服务器启动
+// Start Rust AP Server
 void rust_start_ap_server(void);
 
-// 播放声音
+// Trigger sound playback on C++ side from Rust
 void rust_play_sound(const char* type);
 
 #ifdef __cplusplus

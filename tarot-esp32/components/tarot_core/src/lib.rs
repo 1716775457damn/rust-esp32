@@ -7,11 +7,16 @@ use esp_idf_svc::http::server::EspHttpServer;
 use esp_idf_svc::wifi::{AccessPointConfiguration, Configuration, EspWifi};
 use log::info;
 
-// 保证服务器对象不被销毁
+// Keep server alive
 static mut SERVER: Option<EspHttpServer<'static>> = None;
 
-// C++ FFI 函数
+// Metadata Cache (Performance Optimization)
+static CARD_METADATA_CACHE: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+
+// C++ FFI Functions
 extern "C" {
+    fn cpp_ui_start_shuffle();
+    fn cpp_ui_display_info(name: *const std::os::raw::c_char, keywords: *const std::os::raw::c_char);
     fn cpp_notify_card_ready(slot_id: i32);
     fn rust_play_sound(sound_type: *const std::os::raw::c_char);
 }
@@ -20,10 +25,10 @@ extern "C" {
 #[no_mangle]
 pub extern "C" fn rust_start_ap_server() {
     esp_idf_svc::log::EspLogger::initialize_default();
-    info!("正在启动 Rust AP Server...");
+    info!("Starting Rust AP Server...");
 
     if let Err(e) = start_services() {
-        info!("启动失败: {:?}", e);
+        info!("Start failed: {:?}", e);
     }
 }
 
@@ -32,18 +37,18 @@ fn start_services() -> Result<()> {
     let sys_loop = EspSystemEventLoop::take()?;
     let nvs = esp_idf_svc::nvs::EspDefaultNvsPartition::take()?;
 
-    // 0. 初始化 SPIFFS 用于存储图片 (Phase 3)
+    // 0. Mount SPIFFS for card assets
     let spiffs_conf = esp_idf_sys::esp_vfs_spiffs_conf_t {
         base_path: b"/spiffs\0".as_ptr() as *const u8,
-        partition_label: core::ptr::null(), // 使用默认的 spiffs label
+        partition_label: core::ptr::null(), // Use default label
         max_files: 5,
         format_if_mount_failed: true,
     };
-    // 使用 FFI 强行挂载文件系统
+    // Force mount using FFI
     unsafe {
         esp_idf_sys::esp!(esp_idf_sys::esp_vfs_spiffs_register(&spiffs_conf))?;
     }
-    info!("SPIFFS 已成功挂载在 /spiffs");
+    info!("SPIFFS mounted successfully at /spiffs");
 
     // 1. 初始化 Wi-Fi AP
     let mut wifi = EspWifi::new(
@@ -61,15 +66,15 @@ fn start_services() -> Result<()> {
     }))?;
 
     wifi.start()?;
-    info!("Wi-Fi AP 已开启: SSID = TarotCard");
+    info!("Wi-Fi AP started: SSID = TarotCard");
 
-    // 2. 初始化 HTTP 服务器 (增大栈空间至 16KB 以支持图像解码)
+    // 2. Init HTTP Server (20KB stack for image processes)
     let server_config = esp_idf_svc::http::server::Configuration {
-        stack_size: 16384,
+        stack_size: 20480, 
         ..Default::default()
     };
     let mut server = EspHttpServer::new(&server_config)?;
-    info!("✅ HTTP 服务器配置完成 (Stack: 16KB)");
+    info!("✅ HTTP Server initialized (Stack: 20KB)");
 
     // Root / : 提供华丽的 Web UI
     server.fn_handler("/", Method::Get, |req| {
@@ -79,123 +84,106 @@ fn start_services() -> Result<()> {
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Tarot Card Machine</title>
+            <title>Celestial Tarot Machine</title>
             <style>
+                :root { --gold: #ffd700; --mystic-purple: #2a1b4d; --accent: #ffd700; }
                 body {
-                    background: radial-gradient(circle at center, #1a0b2e 0%, #0d0415 100%);
-                    color: #e0d0ff;
-                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-                    display: flex;
-                    flex-direction: column;
-                    align-items: center;
-                    justify-content: center;
-                    height: 100vh;
-                    margin: 0;
-                    overflow: hidden;
+                    background: radial-gradient(circle at center, #1a0b2e 0%, #050208 100%);
+                    color: white; font-family: 'Cinzel', serif;
+                    display: flex; flex-direction: column; align-items: center; justify-content: center;
+                    height: 100vh; margin: 0; overflow: hidden;
                 }
-                .container {
-                    text-align: center;
-                    padding: 40px;
-                    background: rgba(255, 255, 255, 0.05);
-                    backdrop-filter: blur(10px);
-                    border-radius: 30px;
-                    border: 1px solid rgba(255, 255, 255, 0.1);
-                    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+                .ritual-circle {
+                    position: relative; width: 320px; height: 320px;
+                    border: 2px dashed rgba(255, 215, 0, 0.2);
+                    border-radius: 50%; display: flex; align-items: center; justify-content: center;
+                    animation: rotate 60s linear infinite;
                 }
-                h1 {
-                    font-weight: 300;
-                    letter-spacing: 4px;
-                    text-transform: uppercase;
-                    margin-bottom: 30px;
-                    background: linear-gradient(45deg, #ffd700, #ff8c00);
-                    -webkit-background-clip: text;
-                    -webkit-text-fill-color: transparent;
+                @keyframes rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+                .ui-stable {
+                    position: absolute; width: 100%; height: 100%;
+                    display: flex; flex-direction: column; align-items: center; justify-content: center;
+                    transform: rotate(0deg); /* Counter-rotate if needed */
                 }
+                .card-viewport {
+                    perspective: 1000px; width: 140px; height: 220px;
+                    margin-bottom: 20px;
+                }
+                .card-inner {
+                    position: relative; width: 100%; height: 100%;
+                    text-align: center; transition: transform 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+                    transform-style: preserve-3d;
+                }
+                .card-inner.flipped { transform: rotateY(180deg); }
+                .card-face {
+                    position: absolute; width: 100%; height: 100%;
+                    backface-visibility: hidden; border-radius: 8px;
+                    box-shadow: 0 0 15px rgba(255, 215, 0, 0.3);
+                }
+                .card-back {
+                    background: linear-gradient(135deg, #2a1b4d 0%, #1a0b2e 100%);
+                    border: 2px solid var(--gold);
+                    display: flex; align-items: center; justify-content: center;
+                }
+                .card-front {
+                    background: white; color: black; transform: rotateY(180deg);
+                    display: flex; align-items: center; justify-content: center;
+                    border: 4px solid var(--gold);
+                }
+                .card-content { font-size: 2.5rem; }
                 button {
-                    padding: 20px 40px;
-                    font-size: 1.2rem;
-                    background: linear-gradient(135deg, #6b4c9a 0%, #4a2c7a 100%);
-                    color: white;
-                    border: none;
-                    border-radius: 50px;
-                    cursor: pointer;
-                    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-                    box-shadow: 0 10px 20px rgba(107, 76, 154, 0.3);
-                    text-transform: uppercase;
-                    letter-spacing: 2px;
+                    background: transparent; border: 2px solid var(--gold);
+                    color: var(--gold); padding: 12px 30px; border-radius: 30px;
+                    text-transform: uppercase; letter-spacing: 3px; cursor: pointer;
+                    transition: 0.3s; z-index: 100;
                 }
-                button:hover {
-                    transform: scale(1.05) translateY(-5px);
-                    box-shadow: 0 15px 30px rgba(107, 76, 154, 0.5);
+                button:hover { background: var(--gold); color: black; box-shadow: 0 0 20px var(--gold); }
+                button:disabled { border-color: #444; color: #444; cursor: not-allowed; }
+                #result-text {
+                    margin-top: 20px; text-align: center; opacity: 0; transition: 1s;
                 }
-                button:active {
-                    transform: scale(0.95);
-                }
-                #status {
-                    margin-top: 25px;
-                    font-size: 0.95rem;
-                    font-weight: 300;
-                    letter-spacing: 1px;
-                    min-height: 20px;
-                    color: #ffd700;
-                }
-                .card-result {
-                    margin-top: 30px;
-                    padding: 20px;
-                    background: rgba(107, 76, 154, 0.2);
-                    border-radius: 15px;
-                    border: 1px solid rgba(107, 76, 154, 0.3);
-                    display: none;
-                    animation: fadeIn 0.8s ease-out;
-                }
-                @keyframes fadeIn {
-                    from { opacity: 0; transform: translateY(10px); }
-                    to { opacity: 1; transform: translateY(0); }
-                }
-                .card-name {
-                    font-size: 1.5rem;
-                    color: #ffd700;
-                    margin-bottom: 10px;
-                }
-                .card-desc {
-                    font-size: 0.9rem;
-                    line-height: 1.6;
-                    color: #e0d0ff;
-                }
+                .reveal { opacity: 1 !important; }
+                h2 { color: var(--gold); margin: 0; font-weight: 300; letter-spacing: 2px; }
             </style>
         </head>
         <body>
-            <div class="container">
-                <h1>Tarot Machine</h1>
-                <button onclick="drawCard()">Draw a Card</button>
-                <div id="status">Ready to see your destiny...</div>
-                <div id="result" class="card-result">
-                    <div class="card-name" id="cardName"></div>
-                    <div class="card-desc">The stars have chosen this card for you. Observe its image on the device for deeper wisdom.</div>
+            <div class="ritual-circle"></div>
+            <div class="ui-stable" id="mainUI">
+                <div class="card-viewport">
+                    <div class="card-inner" id="card">
+                        <div class="card-face card-back">✨</div>
+                        <div class="card-face card-front"><div class="card-content">🎴</div></div>
+                    </div>
+                </div>
+                <button onclick="drawCard()" id="drawBtn">Consult Destiny</button>
+                <div id="result-text">
+                    <h2 id="cardName">The Moon</h2>
+                    <p style="color: #aaa; font-size: 0.8rem;">Observe the ritual on your device</p>
                 </div>
             </div>
             <script>
                 function drawCard() {
-                    const btn = document.querySelector('button');
-                    const status = document.getElementById('status');
-                    const result = document.getElementById('result');
+                    const btn = document.getElementById('drawBtn');
+                    const card = document.getElementById('card');
+                    const result = document.getElementById('result-text');
                     const cardName = document.getElementById('cardName');
                     
                     btn.disabled = true;
-                    status.innerText = "Consulting the stars...";
-                    result.style.display = "none";
+                    card.classList.remove('flipped');
+                    result.classList.remove('reveal');
                     
                     fetch('/draw')
                         .then(r => r.json())
                         .then(data => {
-                            status.innerText = "Your destiny is revealed!";
-                            cardName.innerText = data.name;
-                            result.style.display = "block";
-                            btn.disabled = false;
+                            setTimeout(() => {
+                                card.classList.add('flipped');
+                                cardName.innerText = data.name;
+                                result.classList.add('reveal');
+                                btn.disabled = false;
+                            }, 1000); // Sync with shuffle animation
                         })
                         .catch(e => {
-                            status.style.color = "#ff4d4d";
-                            status.innerText = "The connection is weak. Try again.";
+                            alert("The ritual was interrupted.");
                             btn.disabled = false;
                         });
                 }
@@ -208,174 +196,81 @@ fn start_services() -> Result<()> {
         Ok::<(), anyhow::Error>(())
     })?;
 
-    // GET /draw : 随机抽牌并解码显示
+    // GET /draw : Random draw with ritual enhancements
     server.fn_handler("/draw", Method::Get, |req| {
-        info!("收到随机抽牌指令...");
+        info!("Received draw command...");
+        
+        // --- Ritual Phase 1: Start shuffle animation ---
         unsafe {
+            cpp_ui_start_shuffle();
             rust_play_sound(std::ffi::CString::new("shuffle").unwrap().as_ptr());
         }
         
-        // 1. 生成随机索引 (0-94)
-        let random_idx = unsafe { esp_idf_sys::esp_random() % 95 };
-        let jpg_path = format!("/spiffs/{}.jpg", random_idx);
+        // 1. Generate random index (0-77)
+        let random_idx = unsafe { esp_idf_sys::esp_random() % 78 };
         
-        info!("选中卡片: {}", jpg_path);
-        
-        // 2. 读取本地 JPEG
-        let jpeg_data = match std::fs::read(&jpg_path) {
-            Ok(data) => data,
-            Err(e) => {
-                info!("无法读取文件 {}: {:?}", jpg_path, e);
-                let _ = req.into_status_response(500).and_then(|mut r| r.write_all(b"File Read Error"));
-                return Ok::<(), anyhow::Error>(());
-            }
-        };
-
-        // 3. 执行解码逻辑
-        if let Err(e) = decode_jpeg_to_rgb565(&jpeg_data, 0, random_idx as i32) {
-            info!("解码失败: {:?}", e);
-            let _ = req.into_status_response(500).and_then(|mut r| r.write_all(b"Decode Error"));
-        } else {
-            unsafe {
-                rust_play_sound(std::ffi::CString::new("draw").unwrap().as_ptr());
-            }
-            // 获取牌名并返回 JSON
-            let card_name = get_card_name(random_idx as i32);
-            let json_resp = format!(r#"{{"index": {}, "name": "{}"}}"#, random_idx, card_name);
+        // --- Ritual Phase 2: Fetch metadata and notify C++ for direct HW draw ---
+        let (card_name, card_keywords) = get_card_metadata_en(random_idx as i32);
+        unsafe {
+            let c_name = std::ffi::CString::new(card_name.clone()).unwrap();
+            let c_keys = std::ffi::CString::new(card_keywords.clone()).unwrap();
+            cpp_ui_display_info(c_name.as_ptr(), c_keys.as_ptr());
             
-            let mut resp = req.into_response(200, None, &[("Content-Type", "application/json")])?;
-            resp.write_all(json_resp.as_bytes())?;
-            
-            unsafe { cpp_notify_card_ready(0); }
+            // Phase 3: Immediate transition to hardware render
+            rust_play_sound(std::ffi::CString::new("draw").unwrap().as_ptr());
+            cpp_notify_card_ready(random_idx as i32); 
         }
+
+        info!("Selected Card Index: {}", random_idx);
+        
+        let json_resp = format!(r#"{{"index": {}, "name": "{}"}}"#, random_idx, card_name);
+        let mut resp = req.into_response(200, None, &[("Content-Type", "application/json")])?;
+        resp.write_all(json_resp.as_bytes())?;
         
         Ok::<(), anyhow::Error>(())
     })?;
 
-    // POST /upload?slot={id} : 接收二进制图片并写入 SPIFFS (保留作为调试)
-    server.fn_handler("/upload", Method::Post, |mut req| {
-        // ... (省略部分解析逻辑)
-        let mut jpeg_data = Vec::new();
-        let mut buf = [0u8; 1024];
-        while let Ok(bytes_read) = req.read(&mut buf) {
-            if bytes_read == 0 { break; }
-            jpeg_data.extend_from_slice(&buf[..bytes_read]);
-        }
-        
-        if let Err(_e) = decode_jpeg_to_rgb565(&jpeg_data, 0, 0) {
-            let _ = req.into_status_response(500).and_then(|mut r| r.write_all(b"Error"));
-        } else {
-            let _ = req.into_ok_response().and_then(|mut r| r.write_all(b"OK"));
-        }
+    // POST /upload?slot={id} : Legacy placeholder
+    server.fn_handler("/upload", Method::Post, |mut _req| {
+        let _ = _req.into_ok_response().and_then(|mut r| r.write_all(b"OK"));
         Ok::<(), anyhow::Error>(())
     })?;
 
-    // 将服务保存到静态变量中防止被 Drop
+    // Leak references to keep them alive
     unsafe {
         SERVER = Some(server);
     }
     Box::leak(Box::new(wifi));
 
-    info!("HTTP 服务器已启动，监听端口 80");
+    info!("HTTP Server started on port 80");
     Ok(())
 }
 
-/// 核心解码逻辑：将内存中的 JPEG 解码到 SPIFFS 文件
-fn decode_jpeg_to_rgb565(jpeg_data: &[u8], slot_id: i32, card_idx: i32) -> Result<()> {
-    use tjpgdec_rs::{JpegDecoder, MemoryPool};
-    use std::io::{Write, BufRead, BufReader};
-
-    // 1. 获取卡片名称 (从 names.txt)
-    let mut card_name = "Unknown".to_string();
-    if let Ok(file) = std::fs::File::open("/spiffs/names.txt") {
-        let reader = BufReader::new(file);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                let parts: Vec<&str> = l.split(':').collect();
-                if parts.len() >= 2 && parts[0] == card_idx.to_string() {
-                    card_name = parts[1].to_string();
-                    break;
-                }
-            }
-        }
-    }
-
-    // 2. 随机生成正/逆位状态 (50/50 概率)
-    let is_reversed = unsafe { (esp_idf_sys::esp_random() % 100) < 50 };
-    info!("抽卡状态: {} ({})", card_name, if is_reversed { "逆位" } else { "正位" });
-
-    // 3. 执行解码
-    let mut pool_buffer = vec![0u8; 4096]; 
-    let mut pool = MemoryPool::new(&mut pool_buffer);
-    let mut decoder = JpegDecoder::new();
-
-    decoder.prepare(jpeg_data, &mut pool).map_err(|e| anyhow::anyhow!("JPEG Prepare Error: {:?}", e))?;
-    
-    let width = decoder.width();
-    let rgb_path = format!("/spiffs/tarot_{}.rgb565", slot_id);
-    let mut rgb_file = std::fs::File::create(&rgb_path)?;
-
-    let mut line_buffer = vec![0u8; width as usize * 16 * 2];
-    let mut current_row_top = 0;
-    let mut mcu_buf = vec![0i16; decoder.mcu_buffer_size()];
-    let mut work_buf = vec![0u8; decoder.work_buffer_size()];
-
-    let mut write_err = false;
-    decoder.decompress(
-        jpeg_data,
-        0, 
-        &mut mcu_buf,
-        &mut work_buf,
-        &mut |_decoder, bitmap: &[u8], rect| {
-            if write_err { return Ok(false); }
-            if rect.top != current_row_top {
-                rgb_file.write_all(&line_buffer).map_err(|_| { write_err = true; }).ok();
-                line_buffer.fill(0);
-                current_row_top = rect.top;
-            }
-            let b_width = rect.right - rect.left + 1;
-            let b_height = rect.bottom - rect.top + 1;
-            for y in 0..b_height {
-                for x in 0..b_width {
-                    let src_idx = (y as usize * b_width as usize + x as usize) * 3;
-                    let p = ((bitmap[src_idx] as u16 & 0xF8) << 8) | ((bitmap[src_idx + 1] as u16 & 0xFC) << 3) | (bitmap[src_idx + 2] as u16 >> 3);
-                    let dest_idx = ((rect.top + y - current_row_top) as usize * width as usize + (rect.left + x) as usize) * 2;
-                    line_buffer[dest_idx] = (p >> 8) as u8;
-                    line_buffer[dest_idx + 1] = (p & 0xFF) as u8;
-                }
-            }
-            Ok(true)
-        }
-    ).map_err(|e| anyhow::anyhow!("Decode Decompress Error: {:?}", e))?;
-
-    rgb_file.write_all(&line_buffer)?;
-    
-    Ok(())
-}
-
-/// Phase 1 遗留：返回 Rust 组件版本
+/// Returns Rust component version
 #[no_mangle]
 pub extern "C" fn rust_get_version() -> *const u8 {
-    let version = b"Tarot_Core_v0.6_LocalDraw\0";
+    let version = b"Tarot_Core_v0.8_HighSpeed_RGB565\0";
     version.as_ptr()
 }
 
-fn get_card_name(idx: i32) -> String {
-    use std::io::{BufRead, BufReader};
-    if let Ok(file) = std::fs::File::open("/spiffs/names.txt") {
-        let reader = BufReader::new(file);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                let parts: Vec<&str> = l.split(':').collect();
-                if parts.len() >= 2 {
-                    if let Ok(line_idx) = parts[0].parse::<i32>() {
-                        if line_idx == idx {
-                            return parts[1].to_string();
-                        }
-                    }
-                }
+fn get_card_metadata_en(idx: i32) -> (String, String) {
+    let metadata = CARD_METADATA_CACHE.get_or_init(|| {
+        if let Ok(data) = std::fs::read_to_string("/spiffs/meanings_en.json") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                return v;
             }
         }
+        serde_json::Value::Object(serde_json::Map::new())
+    });
+
+    if let Some(card) = metadata.get(idx.to_string()) {
+        let name = card.get("n").and_then(|n| n.as_str()).unwrap_or("Unknown").to_string();
+        let keys = card.get("k").and_then(|k| k.as_str()).unwrap_or("").to_string();
+        return (name, keys);
     }
-    format!("Card #{}", idx)
+    ("Unknown Card".to_string(), "".to_string())
+}
+
+fn get_card_name(idx: i32) -> String {
+    get_card_metadata_en(idx).0
 }

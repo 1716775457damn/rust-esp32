@@ -1,11 +1,13 @@
 [package]
 name = "tarot_core"
-version = "0.1.0"
+version = "0.7.0"
+authors = ["Admin"]
+description = "Tarot machine high-performance ritual engine component"
 edition = "2021"
 
 [lib]
 name = "tarot_core"
-# 编译为静态库，供 C++ CMake 链接
+# Compile as a static library for C++ CMake linking
 crate-type = ["staticlib"]
 
 [dependencies]
@@ -16,8 +18,9 @@ embedded-svc = "0.28"
 anyhow = "1.0"
 log = "0.4"
 tjpgdec-rs = "0.4.0"
-# 显式声明 esp-idf-sys，并禁用所有默认特性（特别是 binstart），防止生成多余的 app_main
+# 显式声明 esp-idf-sys，并禁用所有默认特性（特别是 binstart），防止生成多余 of app_main
 esp-idf-sys = { version = "0.36", default-features = false, features = ["std", "native"] }
+serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 
 [package.metadata.esp-idf-sys]
 esp_idf_tools_install_dir = "from_env"

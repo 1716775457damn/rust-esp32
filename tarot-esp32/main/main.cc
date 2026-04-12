@@ -15,53 +15,91 @@
 #include "esp_pm.h"
 #include "driver/i2s_std.h"
 
-
-// 引入驱动配套文件
+// 引入驱动配套文件与 Rust FFI
 #include "ffi/rust_bridge.h"
 #include "st77916_init_cmds.h"
 
-// 使用系统默认字体避免链接错误
-#define CARD_FONT &lv_font_montserrat_14
-
 static const char *TAG = "tarot_main";
 
-// --- 硬件引脚定义 (基于 C3 标准 SPI 模式) ---
-#define LCD_HOST          SPI2_HOST
-#define PIN_LCD_PCLK      1
-#define PIN_LCD_MOSI      2
-#define PIN_LCD_DC        0
-#define PIN_LCD_CS        21
-#define PIN_LCD_BL        20
+/**
+ * @brief Configuration Namespace
+ * Unified management of pins, display parameters, and bus frequencies.
+ */
+namespace Config {
+    static constexpr int LCD_H_RES = 360;
+    static constexpr int LCD_V_RES = 360;
+    static constexpr int CARD_DIM = 220;
+    static constexpr int BORDER_GAP = 70; // (360 - 220) / 2
+    static constexpr int LV_BUF_LINES = 20;
+    static constexpr uint32_t SPI_FREQ = 15 * 1000 * 1000;
+    
+    // Bus Configuration
+    static constexpr spi_host_device_t LCD_HOST = SPI2_HOST;
+    
+    // Pin Configuration
+    static constexpr gpio_num_t PIN_LCD_PCLK = GPIO_NUM_1;
+    static constexpr gpio_num_t PIN_LCD_MOSI = GPIO_NUM_2;
+    static constexpr gpio_num_t PIN_LCD_DC   = GPIO_NUM_0;
+    static constexpr gpio_num_t PIN_LCD_CS   = GPIO_NUM_21; // Reference pin
+    static constexpr gpio_num_t PIN_LCD_BL   = GPIO_NUM_20;
+    
+    static constexpr gpio_num_t PIN_I2C_SDA  = GPIO_NUM_3;
+    static constexpr gpio_num_t PIN_I2C_SCL  = GPIO_NUM_4;
+    
+    static constexpr gpio_num_t PIN_I2S_BCLK = GPIO_NUM_8;
+    static constexpr gpio_num_t PIN_I2S_LRCK = GPIO_NUM_6;
+    static constexpr gpio_num_t PIN_I2S_DATA = GPIO_NUM_5;
+}
 
+/**
+ * @brief Async Task Event Bus
+ */
+enum class TarotEvent { SHUFFLE, DISPLAY_INFO, REVEAL, PLAY_SOUND };
+struct TarotMessage {
+    TarotEvent type;
+    int slot_id;
+    char text_1[32]; 
+    char text_2[64]; 
+};
 
-#define PIN_I2C_SDA       3
-#define PIN_I2C_SCL       4
+/**
+ * @brief UI Message Bus (Thread Safety)
+ */
+enum class UIEvent { SET_TEXT_NAME, SET_TEXT_KEYS, SHOW_SPINNER, HIDE_SPINNER, SHOW_CARD, FADE_IN };
+struct UIMessage {
+    UIEvent event;
+    int val;
+    char text[64];
+};
 
-// --- I2S 音频引脚 (对齐 PANBOPO) ---
-#define PIN_I2S_BCLK      8
-#define PIN_I2S_LRCK      6
-#define PIN_I2S_DATA      5
-
-// --- LVGL 配置 ---
-#define LCD_H_RES         360
-#define LCD_V_RES         360
-#define LVGL_TICK_MS      5
-#define LV_BUF_LINES      20 // 显存缓冲区行数 (C3 RAM 有限)
+// --- Reliability: Static memory pool to avoid heap fragmentation ---
+static uint8_t s_render_chunk_buf[Config::CARD_DIM * 10 * 2]; 
 
 static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
 static esp_lcd_panel_handle_t panel_handle = NULL;
+static SemaphoreHandle_t lcd_mutex = NULL;
+static QueueHandle_t ritual_queue = NULL;
+static QueueHandle_t ui_queue = NULL; 
+static QueueHandle_t audio_queue = NULL; 
 
-// --- Phase 5: 图片渲染专用缓冲区 ---
-#define TAROT_IMG_SIZE (LCD_H_RES * LCD_V_RES * 2)
-static lv_img_dsc_t tarot_img_dsc = {
-    .header = {.cf = LV_IMG_CF_TRUE_COLOR, .always_zero = 0, .reserved = 0, .w = LCD_H_RES, .h = LCD_V_RES},
-    .data_size = TAROT_IMG_SIZE,
-    .data = NULL,
+/**
+ * @brief RAII LCD Resource Lock
+ */
+class LCDLock {
+public:
+    LCDLock() { if (lcd_mutex) xSemaphoreTake(lcd_mutex, portMAX_DELAY); }
+    ~LCDLock() { if (lcd_mutex) xSemaphoreGive(lcd_mutex); }
 };
-static lv_obj_t *ui_img_obj = NULL;
 
-// --- 驱动回调 ---
+// --- Phase 7: UI 2.0 Premium Ritual UI variables ---
+static lv_obj_t * ui_card_img = NULL;
+static lv_obj_t * ui_name_label = NULL;
+static lv_obj_t * ui_keys_label = NULL;
+static lv_obj_t * ui_spinner = NULL;
+static lv_obj_t * ui_ritual_bg = NULL;
+
+// --- Driver Callbacks ---
 static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx) {
     lv_disp_drv_t *disp_driver = (lv_disp_drv_t *)user_ctx;
     lv_disp_flush_ready(disp_driver);
@@ -69,16 +107,12 @@ static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_
 }
 
 static void lvgl_flush_cb(lv_disp_drv_t *drv, const lv_area_t *area, lv_color_t *color_map) {
-    // ESP_LOGD(TAG, "LVGL Flush: %d,%d to %d,%d", area->x1, area->y1, area->x2, area->y2);
-    int offsetx1 = area->x1;
-    int offsety1 = area->y1;
-    int offsetx2 = area->x2;
-    int offsety2 = area->y2;
-    esp_lcd_panel_draw_bitmap(panel_handle, offsetx1, offsety1, offsetx2 + 1, offsety2 + 1, color_map);
+    LCDLock lock; // 自动获取与释放锁
+    esp_lcd_panel_draw_bitmap(panel_handle, area->x1, area->y1, area->x2 + 1, area->y2 + 1, color_map);
 }
 
 static void lvgl_tick_cb(void *arg) {
-    lv_tick_inc(LVGL_TICK_MS);
+    lv_tick_inc(5); // Fixed 5ms step
 }
 
 // --- 初始化函数 ---
@@ -95,7 +129,7 @@ void bsp_display_backlight_init() {
     ledc_timer_config(&ledc_timer);
 
     ledc_channel_config_t ledc_channel = {
-        .gpio_num       = PIN_LCD_BL,
+        .gpio_num       = Config::PIN_LCD_BL,
         .speed_mode     = LEDC_LOW_SPEED_MODE,
         .channel        = LEDC_CHANNEL_0,
         .intr_type      = LEDC_INTR_DISABLE,
@@ -105,7 +139,7 @@ void bsp_display_backlight_init() {
         .flags          = { .output_invert = 0 }
     };
     ledc_channel_config(&ledc_channel);
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0); // 初始亮度 0%
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0); // Start at 0%
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
@@ -113,38 +147,38 @@ void bsp_display_init() {
     ESP_LOGI(TAG, "初始化 SPI 总线 (Standard mode)...");
     
     spi_bus_config_t buscfg = { };
-    buscfg.sclk_io_num = PIN_LCD_PCLK;
-    buscfg.mosi_io_num = PIN_LCD_MOSI;
+    buscfg.sclk_io_num = Config::PIN_LCD_PCLK;
+    buscfg.mosi_io_num = Config::PIN_LCD_MOSI;
     buscfg.miso_io_num = -1;
     buscfg.quadwp_io_num = -1;
     buscfg.quadhd_io_num = -1;
-    buscfg.max_transfer_sz = LCD_H_RES * LV_BUF_LINES * sizeof(uint16_t);
+    buscfg.max_transfer_sz = Config::LCD_H_RES * Config::LV_BUF_LINES * sizeof(uint16_t);
     
-    ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
+    ESP_ERROR_CHECK(spi_bus_initialize(Config::LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
     
-    // --- 屏幕复位：采用软件复位，不占用 GPIO 3 (SDA) ---
+    // --- Screen Reset: Software reset to avoid using GPIO 3 (SDA) ---
 
-    ESP_LOGI(TAG, "安装面板 IO (8-bit CMD, DC=0, Mode 0)...");
+    ESP_LOGI(TAG, "Install Panel IO (8-bit CMD, DC=0, Mode 0)...");
     esp_lcd_panel_io_handle_t io_handle = NULL;
     
     esp_lcd_panel_io_spi_config_t io_config = { };
-    io_config.cs_gpio_num = PIN_LCD_CS;
-    io_config.dc_gpio_num = 0;
+    io_config.cs_gpio_num = Config::PIN_LCD_CS;
+    io_config.dc_gpio_num = Config::PIN_LCD_DC;
     io_config.spi_mode = 0; 
-    io_config.pclk_hz = 15 * 1000 * 1000; // 降低至 15MHz 以平衡画质与功耗 (减少 BOD 触发)
+    io_config.pclk_hz = Config::SPI_FREQ; 
     io_config.trans_queue_depth = 10;
     io_config.on_color_trans_done = notify_lvgl_flush_ready;
     io_config.user_ctx = &disp_drv;
     io_config.lcd_cmd_bits = 8;
     io_config.lcd_param_bits = 8;
-    io_config.flags.quad_mode = false;
     
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_config, &io_handle));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)Config::LCD_HOST, &io_config, &io_handle));
 
-    ESP_LOGI(TAG, "安装 ST77916 驱动...");
+    ESP_LOGI(TAG, "Install ST77916 Driver...");
     st77916_vendor_config_t vendor_config = {
         .init_cmds = st77916_vendor_init_cmds,
         .init_cmds_size = sizeof(st77916_vendor_init_cmds) / sizeof(st77916_lcd_init_cmd_t),
+        .flags = { .use_qspi_interface = 0 } 
     };
 
     
@@ -158,51 +192,76 @@ void bsp_display_init() {
     
     ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_handle));
     ESP_ERROR_CHECK(esp_lcd_panel_init(panel_handle));
-    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true)); // 对齐小智项目：开启颜色反转
+    ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_handle, true)); // Alignment: Enable color inversion
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_handle, true));
     
-    ESP_LOGI(TAG, "ST77916 驱动初始化完成 (Reset 引脚: %d)", panel_config.reset_gpio_num);
+    ESP_LOGI(TAG, "ST77916 Driver Init Complete (Reset Pin: %d)", panel_config.reset_gpio_num);
     
-    ESP_LOGI(TAG, "初始化 LVGL...");
+    ESP_LOGI(TAG, "Init LVGL...");
     lv_init();
-    lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(LCD_H_RES * LV_BUF_LINES * sizeof(lv_color_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    lv_disp_draw_buf_init(&disp_buf, buf1, NULL, LCD_H_RES * LV_BUF_LINES);
+    lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(Config::LCD_H_RES * Config::LV_BUF_LINES * sizeof(lv_color_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    lv_disp_draw_buf_init(&disp_buf, buf1, NULL, Config::LCD_H_RES * Config::LV_BUF_LINES);
 
     lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = LCD_H_RES;
-    disp_drv.ver_res = LCD_V_RES;
+    disp_drv.hor_res = Config::LCD_H_RES;
+    disp_drv.ver_res = Config::LCD_V_RES;
     disp_drv.flush_cb = lvgl_flush_cb;
     disp_drv.draw_buf = &disp_buf;
     lv_disp_drv_register(&disp_drv);
+
+    // Init core locks and async queues
+    lcd_mutex = xSemaphoreCreateMutex();
+    ritual_queue = xQueueCreate(10, sizeof(TarotMessage));
+    ui_queue = xQueueCreate(20, sizeof(UIMessage));
+    audio_queue = xQueueCreate(5, sizeof(char) * 64);
 
     const esp_timer_create_args_t periodic_timer_args = {
         .callback = &lvgl_tick_cb,
         .arg = NULL,
         .dispatch_method = ESP_TIMER_TASK,
-        .name = "lvgl_tick",
-        .skip_unhandled_events = false
+        .name = "lvgl_tick"
     };
     esp_timer_handle_t periodic_timer;
     ESP_ERROR_CHECK(esp_timer_create(&periodic_timer_args, &periodic_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, LVGL_TICK_MS * 1000));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 5000));
 
     bsp_display_backlight_init();
 
     // --- UI 样式：圆屏裁剪 ---
-    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(0x000000), 0); // 黑色背景
-    lv_obj_set_style_radius(lv_scr_act(), LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_clip_corner(lv_scr_act(), true, 0);
+    // 1. Full-screen Immersive Background (360x360)
+    ui_ritual_bg = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(ui_ritual_bg, Config::LCD_H_RES, Config::LCD_V_RES);
+    lv_obj_center(ui_ritual_bg);
+    lv_obj_set_style_bg_color(ui_ritual_bg, lv_color_make(13, 4, 18), 0); // Mystic Purple
+    lv_obj_set_style_border_width(ui_ritual_bg, 0, 0);
+    lv_obj_set_style_radius(ui_ritual_bg, LV_RADIUS_CIRCLE, 0);
 
-    // 初始化图片显示对象
-    ui_img_obj = lv_img_create(lv_scr_act());
-    lv_obj_center(ui_img_obj);
-    lv_obj_set_style_opa(ui_img_obj, 0, 0); // 默认透明，等待动画
-    
-    // 默认背景文字
-    lv_obj_t * welcome_label = lv_label_create(lv_scr_act());
-    lv_label_set_text(welcome_label, "Ready for Tarot");
-    lv_obj_set_style_text_font(welcome_label, CARD_FONT, 0);
-    lv_obj_align(welcome_label, LV_ALIGN_BOTTOM_MID, 0, -40);
+    // 2. Card Image Viewport (Downsized to 220 to fit Flash)
+    ui_card_img = lv_img_create(ui_ritual_bg);
+    lv_obj_set_size(ui_card_img, Config::CARD_DIM, Config::CARD_DIM); 
+    lv_obj_align(ui_card_img, LV_ALIGN_TOP_MID, 0, 30); // Lowered Y offset
+    lv_obj_add_flag(ui_card_img, LV_OBJ_FLAG_HIDDEN); 
+
+    // 3. Card Name Label (Golden theme)
+    ui_name_label = lv_label_create(ui_ritual_bg);
+    lv_obj_set_style_text_color(ui_name_label, lv_color_make(255, 215, 0), 0);
+    lv_obj_align(ui_name_label, LV_ALIGN_TOP_MID, 0, 285);
+    lv_obj_set_style_text_align(ui_name_label, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(ui_name_label, "Celestial Tarot");
+
+    // 4. Interpretation Label
+    ui_keys_label = lv_label_create(ui_ritual_bg);
+    lv_obj_set_style_text_color(ui_keys_label, lv_color_make(180, 160, 255), 0);
+    lv_obj_set_style_text_font(ui_keys_label, &lv_font_montserrat_14, 0);
+    lv_obj_align(ui_keys_label, LV_ALIGN_TOP_MID, 0, 315);
+    lv_label_set_text(ui_keys_label, "Ready for your fate");
+
+    // 5. Shuffle Ritual Spinner
+    ui_spinner = lv_spinner_create(ui_ritual_bg, 1000, 60);
+    lv_obj_set_size(ui_spinner, 240, 240);
+    lv_obj_center(ui_spinner);
+    lv_obj_set_style_arc_color(ui_spinner, lv_color_make(218, 165, 32), LV_PART_INDICATOR);
+    lv_obj_add_flag(ui_spinner, LV_OBJ_FLAG_HIDDEN);
 }
 
 // --- Phase 6: I2S & ES8311 音频播放系统 ---
@@ -212,18 +271,198 @@ static i2c_master_dev_handle_t es8311_dev_handle = NULL;
 
 #define ES8311_ADDR 0x18
 
-// 简化的 ES8311 唤醒序列 (写入寄存器 + 错误检测)
+// --- Phase 8: FFI 接口实现 (与 Rust 协同) ---
+extern "C" void cpp_ui_start_shuffle() {
+    TarotMessage m = { .type = TarotEvent::SHUFFLE, .slot_id = 0, .text_1 = {0}, .text_2 = {0} };
+    xQueueSend(ritual_queue, &m, 0);
+}
+
+extern "C" void cpp_ui_display_info(const char* name, const char* keys) {
+    TarotMessage m = { .type = TarotEvent::DISPLAY_INFO, .slot_id = 0, .text_1 = {0}, .text_2 = {0} };
+    strncpy(m.text_1, name ? name : "", sizeof(m.text_1) - 1);
+    strncpy(m.text_2, keys ? keys : "", sizeof(m.text_2) - 1);
+    xQueueSend(ritual_queue, &m, 0);
+}
+
+/**
+ * @brief Error Defense: Draw a placeholder rectangle if asset is missing.
+ */
+static void DrawErrorPlaceholder() {
+    LCDLock lock;
+    uint16_t* color_buf = (uint16_t*)s_render_chunk_buf;
+    // Fill with mystic purple placeholder
+    for(int i=0; i < Config::CARD_DIM * 10; i++) color_buf[i] = 0x4008; 
+    
+    for(int y=0; y < Config::CARD_DIM; y += 10) {
+        esp_lcd_panel_draw_bitmap(panel_handle, Config::BORDER_GAP, 30 + y, 
+                                 Config::BORDER_GAP + Config::CARD_DIM, 30 + y + 10, color_buf);
+    }
+}
+
+// Direct Hardware Render: Chunked draw (Granular locking)
+static void DisplayCardToHardware(int card_idx) {
+    char filename[64];
+    sprintf(filename, "/spiffs/%d.bin", card_idx); // Direct mapping to pre-converted bin
+    
+    FILE* f = fopen(filename, "rb");
+    if (!f) {
+        ESP_LOGE(TAG, "Asset Missing: %s", filename);
+        DrawErrorPlaceholder();
+        return;
+    }
+
+    const int chunk_size = Config::CARD_DIM * 10 * 2;
+    
+    for (int y = 0; y < Config::CARD_DIM; y += 10) {
+        int y_start = 30 + y;
+        int y_end   = 30 + y + 10;
+        if (y_start >= y_end || y_end > Config::LCD_V_RES) break;
+
+        // A. 此处不持锁，允许 I/O 与其他任务并发
+        size_t read = fread(s_render_chunk_buf, 1, chunk_size, f);
+        if (read == 0) break;
+        
+        // B. 仅在推送总线时持锁 (细粒度锁)
+        {
+            LCDLock lock;
+            esp_lcd_panel_draw_bitmap(panel_handle, Config::BORDER_GAP, y_start, 
+                                    Config::BORDER_GAP + Config::CARD_DIM, y_end, s_render_chunk_buf);
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(2)); // Tiny delay for responsiveness
+    }
+    fclose(f);
+}
+
+// --- Reveal Fade-In Animation ---
+static void UI_FadeIn(lv_obj_t* obj) {
+    if (!obj) return;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_values(&a, 0, 255);
+    lv_anim_set_time(&a, 800);
+    lv_anim_set_exec_cb(&a, [](void* var, int32_t v){ lv_obj_set_style_opa((lv_obj_t*)var, v, 0); });
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
+static void play_wav(const char* filepath) {
+    FILE* f = fopen(filepath, "rb");
+    if (!f) {
+        ESP_LOGE(TAG, "Cannot open sound file: %s", filepath);
+        return;
+    }
+
+    ESP_LOGI(TAG, "Start playback (16kHz Stereo): %s", filepath);
+    gpio_set_level(GPIO_NUM_7, 0); 
+    
+    fseek(f, 44, SEEK_SET);
+    
+    // --- Memory Optimization: Use pre-allocated heap instead of stack ---
+    static int16_t* mono_buf = nullptr;
+    static int16_t* stereo_buf = nullptr;
+    if (!mono_buf) mono_buf = (int16_t*)heap_caps_malloc(256 * sizeof(int16_t), MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    if (!stereo_buf) stereo_buf = (int16_t*)heap_caps_malloc(512 * sizeof(int16_t), MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+
+    size_t samples_read, bytes_written;
+    int total_bytes = 0;
+
+    while ((samples_read = fread(mono_buf, sizeof(int16_t), 256, f)) > 0) {
+        for (int i = 0; i < (int)samples_read; i++) {
+            stereo_buf[i * 2] = mono_buf[i];     
+            stereo_buf[i * 2 + 1] = mono_buf[i]; 
+        }
+        i2s_channel_write(tx_handle, stereo_buf, samples_read * 4, &bytes_written, portMAX_DELAY);
+        total_bytes += bytes_written;
+    }
+    
+    gpio_set_level(GPIO_NUM_7, 1); 
+    ESP_LOGI(TAG, "Playback Complete: %d bytes", total_bytes);
+    fclose(f);
+}
+
+/**
+ * @brief Audio Task (Priority 3)
+ */
+static void audio_task(void *arg) {
+    char path[64];
+    ESP_LOGI(TAG, "Audio task started...");
+    while (xQueueReceive(audio_queue, path, portMAX_DELAY)) {
+        play_wav(path);
+    }
+}
+
+/**
+ * @brief Async Ritual Task: Handles render & sound without blocking HTTP
+ */
+static void tarot_ritual_task(void *arg) {
+    TarotMessage msg;
+    ESP_LOGI(TAG, "Ritual task started...");
+    
+    while (xQueueReceive(ritual_queue, &msg, portMAX_DELAY)) {
+        switch (msg.type) {
+            case TarotEvent::SHUFFLE:
+                {
+                    UIMessage m = { UIEvent::SHOW_SPINNER, 0, "" }; 
+                    xQueueSend(ui_queue, &m, 0);
+                    m = { UIEvent::SET_TEXT_NAME, 0, "Consulting Stars..." };
+                    xQueueSend(ui_queue, &m, 0);
+                }
+                break;
+                
+            case TarotEvent::DISPLAY_INFO:
+                {
+                    UIMessage m = { UIEvent::SET_TEXT_NAME, 0, "" };
+                    strncpy(m.text, msg.text_1, sizeof(m.text)-1);
+                    xQueueSend(ui_queue, &m, 0);
+                    m = { UIEvent::SET_TEXT_KEYS, 0, "" };
+                    strncpy(m.text, msg.text_2, sizeof(m.text)-1);
+                    xQueueSend(ui_queue, &m, 0);
+                }
+                break;
+                
+            case TarotEvent::REVEAL: {
+                {
+                    UIMessage m = { UIEvent::HIDE_SPINNER, 0, "" };
+                    xQueueSend(ui_queue, &m, 0);
+                }
+                
+                // Allow GUI a window to refresh
+                vTaskDelay(pdMS_TO_TICKS(20)); 
+                
+                DisplayCardToHardware(msg.slot_id); // Now slot_id is the actual card index
+                
+                {
+                    UIMessage m = { UIEvent::FADE_IN, 0, "" };
+                    xQueueSend(ui_queue, &m, 0);
+                }
+                break;
+            }
+            case TarotEvent::PLAY_SOUND:
+                xQueueSend(audio_queue, msg.text_2, 0);
+                break;
+        }
+    }
+}
+
+extern "C" void cpp_notify_card_ready(int slot_id) {
+    TarotMessage m = { .type = TarotEvent::REVEAL, .slot_id = slot_id, .text_1 = {0}, .text_2 = {0} };
+    xQueueSend(ritual_queue, &m, 0);
+}
+
+// ES8311 Wakeup Sequence
 esp_err_t es8311_write_reg(uint8_t reg, uint8_t val) {
     uint8_t buf[2] = {reg, val};
     esp_err_t ret = i2c_master_transmit(es8311_dev_handle, buf, 2, 100);
     if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "I2C 写入失败 [0x%02X]=0x%02X: %s", reg, val, esp_err_to_name(ret));
+        ESP_LOGE(TAG, "I2C Write Failed [0x%02X]=0x%02X: %s", reg, val, esp_err_to_name(ret));
     }
     return ret;
 }
 
 void bsp_audio_init() {
-    ESP_LOGI(TAG, "正在强制拉低 GPIO 11 以开启功放...");
+    ESP_LOGI(TAG, "Forcing GPIO 11 LOW to enable PA...");
     gpio_config_t pa_cfg = {
         .pin_bit_mask = (1ULL << 11),
         .mode = GPIO_MODE_OUTPUT,
@@ -235,12 +474,12 @@ void bsp_audio_init() {
     gpio_set_level(GPIO_NUM_11, 0); 
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // 1. 初始化 I2C 总线
-    ESP_LOGI(TAG, "初始化 I2C (SDA:%d SCL:%d)...", PIN_I2C_SDA, PIN_I2C_SCL);
+    // 1. Init I2C Bus
+    ESP_LOGI(TAG, "Init I2C (SDA:%d SCL:%d)...", Config::PIN_I2C_SDA, Config::PIN_I2C_SCL);
     i2c_master_bus_config_t i2c_bus_config = {
         .i2c_port = I2C_NUM_0,
-        .sda_io_num = (gpio_num_t)PIN_I2C_SDA,
-        .scl_io_num = (gpio_num_t)PIN_I2C_SCL,
+        .sda_io_num = Config::PIN_I2C_SDA,
+        .scl_io_num = Config::PIN_I2C_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .glitch_ignore_cnt = 7,
         .intr_priority = 0,
@@ -253,214 +492,142 @@ void bsp_audio_init() {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address = ES8311_ADDR,
         .scl_speed_hz = 100000,
+        .scl_wait_us = 0,
+        .flags = { .disable_ack_check = 0 }
     };
     ESP_ERROR_CHECK(i2c_master_bus_add_device(i2c_bus_handle, &dev_cfg, &es8311_dev_handle));
 
-    // 2. 唤醒 ES8311 官方驱动极速锁定序列 (针对无 MCLK 优化的 16kHz 环境)
-    ESP_LOGI(TAG, "正在唤醒 ES8311 (官方驱动位对齐模式)...");
+    // 2. Wakeup ES8311 (Official Bit-aligned mode for 16kHz)
+    ESP_LOGI(TAG, "Waking up ES8311...");
     vTaskDelay(pdMS_TO_TICKS(50));
     
-    // A. 基础抗干扰与预复位
-    es8311_write_reg(0x44, 0x08); // 官方双写抗干扰逻辑
+    // A. Anti-interference & Pre-reset
     es8311_write_reg(0x44, 0x08); 
-    es8311_write_reg(0x45, 0x00); // GPIO 设为默认模式
-    es8311_write_reg(0x01, 0x30); // 官方推荐: 预设电源管理开启
-    es8311_write_reg(0x02, 0x10); // 预备 PLL 锁相环
-    es8311_write_reg(0x03, 0x10); // 官方 ADC 开屏
-    es8311_write_reg(0x16, 0x24); // 官方推荐 ALC 保持值
-    es8311_write_reg(0x04, 0x10); // DAC OSR 设置
-    es8311_write_reg(0x00, 0x80); // 设为 Slave 模式 (由 ESP32 提供 BCLK/LRCLK)
+    es8311_write_reg(0x44, 0x08); 
+    es8311_write_reg(0x45, 0x00); 
+    es8311_write_reg(0x01, 0x30); 
+    es8311_write_reg(0x02, 0x10); 
+    es8311_write_reg(0x03, 0x10); 
+    es8311_write_reg(0x16, 0x24); 
+    es8311_write_reg(0x04, 0x10); 
+    es8311_write_reg(0x00, 0x80); 
     
-    // B. *** 核心锁定：无 MCLK 下的 PLL 倍频对齐 ***
-    // 对于 16kHz, 官方驱动计算得出 REG01=0xBF, REG02=0x18 (即 datmp=3, 倍频=x8)
-    es8311_write_reg(0x01, 0xBF); // 开启全域时钟电源
-    es8311_write_reg(0x02, 0x18); // 关键：开启 x8 倍频，同步 BCLK 信号
-    es8311_write_reg(0x06, 0x03); // BCLK 分频对齐 (BCLK_DIV=4)
+    // B. *** PLL Lock for non-MCLK environment ***
+    // Official: REG01=0xBF, REG02=0x18 for 16kHz
+    es8311_write_reg(0x01, 0xBF); 
+    es8311_write_reg(0x02, 0x18); 
+    es8311_write_reg(0x06, 0x03); 
     
-    // C. 模拟通路与协议深度对齐
-    es8311_write_reg(0x09, 0x0C); // Philips 16bit 格式
+    // C. Analog path & Protocol alignment
+    es8311_write_reg(0x09, 0x0C); 
     es8311_write_reg(0x0A, 0x0C); 
-    es8311_write_reg(0x0E, 0x02); // 官方系统偏置开启
-    es8311_write_reg(0x12, 0x00); // DAC 偏置稳定
-    es8311_write_reg(0x13, 0x10); // Bias 驱动开启
-    es8311_write_reg(0x14, 0x1A); // 模拟增益初始化 (+0dB)
-    es8311_write_reg(0x1B, 0x0A); // VREF 稳定电压
-    es8311_write_reg(0x1C, 0x6A); // VREF 驱动强度
+    es8311_write_reg(0x0E, 0x02); 
+    es8311_write_reg(0x12, 0x00); 
+    es8311_write_reg(0x13, 0x10); 
+    es8311_write_reg(0x14, 0x1A); 
+    es8311_write_reg(0x1B, 0x0A); 
+    es8311_write_reg(0x1C, 0x6A); 
     
-    // D. 动力输出与最终音量精调
-    es8311_write_reg(0x0D, 0x01); // 全硬件 PowerUp
-    es8311_write_reg(0x32, 0x90); // *** 音量优化: 从 0xBF(80%) 降至 0x90(~55%) ***
-    es8311_write_reg(0x31, 0x00); // 开启 DAC 信号通路 (Mute=0)
+    // D. Power & Volume Refinement
+    es8311_write_reg(0x0D, 0x01); 
+    es8311_write_reg(0x32, 0x90); // Vol: ~55%
+    es8311_write_reg(0x31, 0x00); // DAC Open (Mute=0)
     vTaskDelay(pdMS_TO_TICKS(50)); 
     
-    ESP_LOGI(TAG, "ES8311 唤醒完毕 (官方驱动位对齐模式)");
+    ESP_LOGI(TAG, "ES8311 Wakeup Complete");
 
-    // 3. 初始化 I2S 频道 (对齐官方时序: 24kHz, Philips Standard)
+    // 3. Init I2S Channel (24kHz, Philips Standard)
     i2s_chan_config_t i2s_chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     i2s_chan_cfg.auto_clear_after_cb = true;
     ESP_ERROR_CHECK(i2s_new_channel(&i2s_chan_cfg, &tx_handle, NULL));
 
     i2s_std_config_t std_cfg = {
-        .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000), 
+        .clk_cfg = {
+            .sample_rate_hz = 16000,
+            .clk_src = I2S_CLK_SRC_DEFAULT,
+            .ext_clk_freq_hz = 0,
+            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+        },
         .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
         .gpio_cfg = {
             .mclk = I2S_GPIO_UNUSED,
-            .bclk = (gpio_num_t)PIN_I2S_BCLK,
-            .ws = (gpio_num_t)PIN_I2S_LRCK,
-            .dout = (gpio_num_t)PIN_I2S_DATA,
+            .bclk = Config::PIN_I2S_BCLK,
+            .ws = Config::PIN_I2S_LRCK,
+            .dout = Config::PIN_I2S_DATA,
             .din = I2S_GPIO_UNUSED,
             .invert_flags = { .mclk_inv = false, .bclk_inv = false, .ws_inv = false },
         },
     };
-    std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_AUTO;
     std_cfg.slot_cfg.ws_width = I2S_DATA_BIT_WIDTH_16BIT;
     std_cfg.slot_cfg.bit_shift = true;
-    std_cfg.slot_cfg.left_align = true; // *** 核心修正: 根据参考工程开启左对齐 ***
+    std_cfg.slot_cfg.left_align = true; // Alignment: Left-aligned per reference
     std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle, &std_cfg));
     ESP_ERROR_CHECK(i2s_channel_enable(tx_handle));
 }
 
-static void play_wav(const char* filepath) {
-    FILE* f = fopen(filepath, "rb");
-    if (!f) {
-        ESP_LOGE(TAG, "无法打开音效文件: %s", filepath);
-        return;
-    }
 
-    ESP_LOGI(TAG, "开始播放音效 (16kHz 立体声克隆模式): %s", filepath);
-    gpio_set_level(GPIO_NUM_7, 0); // 调暗背光
-    
-    fseek(f, 44, SEEK_SET);
-    int16_t mono_buf[256];
-    int16_t stereo_buf[512]; // 每一个采样点复制成一对
-    size_t samples_read, bytes_written;
-    int total_bytes = 0;
-
-    while ((samples_read = fread(mono_buf, sizeof(int16_t), 256, f)) > 0) {
-        for (int i = 0; i < samples_read; i++) {
-            stereo_buf[i * 2] = mono_buf[i];     // 左声道
-            stereo_buf[i * 2 + 1] = mono_buf[i]; // 右声道
-        }
-        i2s_channel_write(tx_handle, stereo_buf, samples_read * 4, &bytes_written, portMAX_DELAY);
-        total_bytes += bytes_written;
-    }
-    
-    gpio_set_level(GPIO_NUM_7, 1); // 恢复背光
-    ESP_LOGI(TAG, "音频播放完毕，已写入 I2S 总量: %d 字节", total_bytes);
-    fclose(f);
-}
-
-// 异步播放任务封装
+// Async playback wrapper
 extern "C" void rust_play_sound(const char* type) {
     if (type == NULL) return;
-    ESP_LOGI(TAG, "FFI: 收到音频播放请求 [%s]", type);
+    TarotMessage m = { .type = TarotEvent::PLAY_SOUND, .slot_id = 0, .text_1 = {0}, .text_2 = {0} };
     
-    char path[64];
+    // Reuse text_2 for path
     if (strcmp(type, "shuffle") == 0) {
-        snprintf(path, sizeof(path), "/spiffs/shuffle.wav");
+        strcpy(m.text_2, "/spiffs/shuffle.wav");
     } else {
-        snprintf(path, sizeof(path), "/spiffs/draw.wav");
+        strcpy(m.text_2, "/spiffs/draw.wav");
     }
-    
-    play_wav(path);
+    xQueueSend(ritual_queue, &m, 0);
 }
 
-// --- 动画回调 ---
-static void anim_opa_cb(void * var, int32_t v) {
-    lv_obj_set_style_opa((lv_obj_t *)var, v, 0);
-}
 
-// --- Phase 5: 从 SPIFFS 加载并显示图片 ---
-// --- Phase 5: 从 SPIFFS 加载并显示图片 ---
-static void DisplayCardFromSpiffs(int slot_id) {
-    char filename[64];
-    // 根据 Rust 端的解码逻辑，文件名应为 /spiffs/tarot_0.rgb565
-    sprintf(filename, "/spiffs/tarot_%d.rgb565", slot_id);
-    
-    FILE* f = fopen(filename, "rb");
-    if (!f) {
-        ESP_LOGE(TAG, "无法打开文件: %s", filename);
-        return;
-    }
-
-    // 获取文件大小进行校验 (预期 360*360*2 = 259200 字节)
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    ESP_LOGI(TAG, "开始渲染图片: %s (大小: %ld)", filename, size);
-
-    // 采用分块渲染模式，每次处理 10 行像素以更精细地控制电流
-    const int lines_per_chunk = 10;
-    const int chunk_size = LCD_H_RES * lines_per_chunk * 2;
-    uint8_t* chunk_buf = (uint8_t*)heap_caps_malloc(chunk_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    
-    if (!chunk_buf) {
-        ESP_LOGE(TAG, "初始化分块缓冲区失败！");
-        fclose(f);
-        return;
-    }
-
-    // 循环读取并发送到屏幕
-    for (int y = 0; y < LCD_V_RES; y += lines_per_chunk) {
-        int actual_lines = (y + lines_per_chunk <= LCD_V_RES) ? lines_per_chunk : (LCD_V_RES - y);
-        int read_bytes = actual_lines * LCD_H_RES * 2;
-        
-        if (fread(chunk_buf, 1, read_bytes, f) != read_bytes) {
-            ESP_LOGE(TAG, "文件读取异常 at y=%d", y);
-            break;
+/**
+ * @brief GUI Task: Exclusive LVGL operations
+ */
+static void gui_task(void *arg) {
+    UIMessage msg;
+    ESP_LOGI(TAG, "GUI Task Started (Stack: 16KB)");
+    while(true) {
+        // 1. Consume UI Command Queue
+        while (xQueueReceive(ui_queue, &msg, 0)) {
+            switch (msg.event) {
+                case UIEvent::SET_TEXT_NAME:
+                    if (ui_name_label) lv_label_set_text(ui_name_label, msg.text);
+                    break;
+                case UIEvent::SET_TEXT_KEYS:
+                    if (ui_keys_label) lv_label_set_text(ui_keys_label, msg.text);
+                    break;
+                case UIEvent::SHOW_SPINNER:
+                    if (ui_spinner) lv_obj_clear_flag(ui_spinner, LV_OBJ_FLAG_HIDDEN);
+                    break;
+                case UIEvent::HIDE_SPINNER:
+                    if (ui_spinner) lv_obj_add_flag(ui_spinner, LV_OBJ_FLAG_HIDDEN);
+                    break;
+                case UIEvent::FADE_IN:
+                    UI_FadeIn(ui_name_label);
+                    UI_FadeIn(ui_keys_label);
+                    break;
+                case UIEvent::SHOW_CARD:
+                    if (ui_card_img) lv_obj_clear_flag(ui_card_img, LV_OBJ_FLAG_HIDDEN);
+                    break;
+            }
         }
         
-        esp_lcd_panel_draw_bitmap(panel_handle, 0, y, LCD_H_RES, y + actual_lines, chunk_buf);
-        
-        // 关键：加入节奏控制，防止瞬时电流过大触发 BOD，同时让图片像帘幕一样平滑展开
-        vTaskDelay(pdMS_TO_TICKS(12));
+        // 2. 驱动 LVGL 定时器
+        lv_timer_handler();
+        vTaskDelay(pdMS_TO_TICKS(10));
     }
-    
-    // 分阶段开启背光以降低瞬间峰值电流
-    gpio_config_t bl_gpio_config = {
-        .pin_bit_mask = (1ULL << 20),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&bl_gpio_config);
-    gpio_set_level((gpio_num_t)20, 0); // 先关闭
-    gpio_set_level((gpio_num_t)20, 1);
-
-    free(chunk_buf);
-    fclose(f);
-
-    // 更新 LVGL 图像对象
-    lv_img_set_src(ui_img_obj, &tarot_img_dsc);
-    
-    // 启动淡入动画
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, ui_img_obj);
-    lv_anim_set_values(&a, 0, 255);
-    lv_anim_set_time(&a, 800);
-    lv_anim_set_exec_cb(&a, anim_opa_cb);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_start(&a);
-
-    // 不需要调用 lv_obj_invalidate，因为我们已经手动精准刷屏
-    ESP_LOGI(TAG, "图片显示更新成功 (硬件直接渲染)");
 }
 
-extern "C" {
-    void app_main(void);
-}
-
-void app_main(void)
+extern "C" void app_main(void)
 {
     printf("========================================\n");
-    printf("塔罗抽卡机 Phase 4: 屏幕 & LVGL 启动\n");
+    printf("Tarot Machine UI 3.0: High Stability\n");
     printf("========================================\n");
 
-    // 1. 初始化 NVS
+    // 1. Init NVS
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_ERROR_CHECK(nvs_flash_erase());
@@ -468,32 +635,34 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    // 2. 初始化核心外设 (软启动模式)
-    bsp_display_init(); // 此时背光为 0%
-    bsp_audio_init();   // 加载芯片配置
+    // 2. Init Core Peripherals
+    bsp_display_init(); 
+    bsp_audio_init();   
 
-    // 3. 延时进入，避开上电电流冲击
-    vTaskDelay(pdMS_TO_TICKS(200));
-    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 800); // 渐进开启背光
-    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    // Start Ritual Task (Prio 4)
+    xTaskCreate(tarot_ritual_task, "RitualTask", 16384, NULL, 4, NULL);
+    
+    // Start GUI Task (Prio 5)
+    xTaskCreate(gui_task, "GUITask", 16384, NULL, 5, NULL);
 
-    // 4. 启动 Rust 核心
+    // Start Audio Task (Prio 3)
+    xTaskCreate(audio_task, "AudioTask", 4096, NULL, 3, NULL);
+
+    // 3. Start Rust Core
     const char* version = rust_get_version();
-    printf("✅ Rust Core 版本: %s\n", version);
+    printf("✅ Rust Core Version: %s\n", version);
     rust_start_ap_server(); 
 
-    // UI 主循环
-    while(true) {
-        lv_timer_handler();
-        vTaskDelay(pdMS_TO_TICKS(10));
-    }
-}
-
-// Rust 通过 FFI 调用此函数
-// Rust 通过 FFI 调用此函数
-extern "C" void cpp_notify_card_ready(int slot_id) {
-    ESP_LOGI(TAG, "收到 Rust 通知: 卡片已就绪 (Slot %d)", slot_id);
+    // 4. Fade in backlight
+    vTaskDelay(pdMS_TO_TICKS(200));
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 800);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
     
-    // 3. 进入 Phase 5: 开启卡片显示流程
-    DisplayCardFromSpiffs(slot_id); 
+    // System monitoring loop
+    while(true) {
+        ESP_LOGI("SYS", "Free Heap: %lu bytes, Max Block: %lu bytes", 
+                 (unsigned long)esp_get_free_heap_size(),
+                 (unsigned long)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    }
 }
