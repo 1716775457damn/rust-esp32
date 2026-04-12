@@ -31,7 +31,7 @@ namespace Config {
     static constexpr int CARD_DIM = 220;
     static constexpr int BORDER_GAP = 70; // (360 - 220) / 2
     static constexpr int LV_BUF_LINES = 20;
-    static constexpr uint32_t SPI_FREQ = 15 * 1000 * 1000;
+    static constexpr uint32_t SPI_FREQ = 40 * 1000 * 1000; // V4.3: Boosted for smaller sync window
     
     // Bus Configuration
     static constexpr spi_host_device_t LCD_HOST = SPI2_HOST;
@@ -79,6 +79,8 @@ static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
 static esp_lcd_panel_handle_t panel_handle = NULL;
 static SemaphoreHandle_t lcd_mutex = NULL;
+static SemaphoreHandle_t dma_done_sem = NULL;         // V4.3: DMA Sync Signal
+static volatile bool g_card_rendering = false;       // V4.3: Task Isolation Flag
 static QueueHandle_t ritual_queue = NULL;
 static QueueHandle_t ui_queue = NULL; 
 static QueueHandle_t audio_queue = NULL; 
@@ -103,6 +105,13 @@ static lv_obj_t * ui_ritual_bg = NULL;
 static bool notify_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_io_event_data_t *edata, void *user_ctx) {
     lv_disp_drv_t *disp_driver = (lv_disp_drv_t *)user_ctx;
     lv_disp_flush_ready(disp_driver);
+    
+    // V4.3: Notify the ritual task that DMA transfer is complete
+    if (dma_done_sem) {
+        BaseType_t high_task_wakeup = pdFALSE;
+        xSemaphoreGiveFromISR(dma_done_sem, &high_task_wakeup);
+        return high_task_wakeup == pdTRUE;
+    }
     return false;
 }
 
@@ -211,6 +220,9 @@ void bsp_display_init() {
 
     // Init core locks and async queues
     lcd_mutex = xSemaphoreCreateMutex();
+    dma_done_sem = xSemaphoreCreateBinary();
+    xSemaphoreGive(dma_done_sem); // Initial state: Ready for first transfer
+    
     ritual_queue = xQueueCreate(10, sizeof(TarotMessage));
     ui_queue = xQueueCreate(20, sizeof(UIMessage));
     audio_queue = xQueueCreate(5, sizeof(char) * 64);
@@ -299,10 +311,10 @@ static void DrawErrorPlaceholder() {
     }
 }
 
-// Direct Hardware Render: Chunked draw (Granular locking)
+// Direct Hardware Render: Chunked draw (Granular locking & DMA Sync)
 static void DisplayCardToHardware(int card_idx) {
     char filename[64];
-    sprintf(filename, "/spiffs/%d.bin", card_idx); // Direct mapping to pre-converted bin
+    sprintf(filename, "/spiffs/%d.bin", card_idx);
     
     FILE* f = fopen(filename, "rb");
     if (!f) {
@@ -311,6 +323,7 @@ static void DisplayCardToHardware(int card_idx) {
         return;
     }
 
+    g_card_rendering = true; // Block LVGL refresh to protect pixels
     const int chunk_size = Config::CARD_DIM * 10 * 2;
     
     for (int y = 0; y < Config::CARD_DIM; y += 10) {
@@ -318,19 +331,39 @@ static void DisplayCardToHardware(int card_idx) {
         int y_end   = 30 + y + 10;
         if (y_start >= y_end || y_end > Config::LCD_V_RES) break;
 
-        // A. 此处不持锁，允许 I/O 与其他任务并发
-        size_t read = fread(s_render_chunk_buf, 1, chunk_size, f);
-        if (read == 0) break;
+        // V4.3: Wait for previous DMA stripe to finish before overwriting buffer
+        if (xSemaphoreTake(dma_done_sem, pdMS_TO_TICKS(100)) != pdTRUE) {
+            ESP_LOGW(TAG, "DMA Sync Timeout at y=%d", y);
+        }
+
+        // A. fread with defensive retry
+        size_t read = 0;
+        int retry = 3;
+        while (retry-- > 0) {
+            read = fread(s_render_chunk_buf, 1, chunk_size, f);
+            if (read > 0) break;
+            vTaskDelay(pdMS_TO_TICKS(5)); 
+        }
         
-        // B. 仅在推送总线时持锁 (细粒度锁)
+        if (read == 0) {
+            ESP_LOGE(TAG, "Flash Read Error at y=%d", y);
+            xSemaphoreGive(dma_done_sem); // Release if failing
+            break;
+        }
+        
+        // B. Push to hardware with exclusive lock
         {
             LCDLock lock;
             esp_lcd_panel_draw_bitmap(panel_handle, Config::BORDER_GAP, y_start, 
                                     Config::BORDER_GAP + Config::CARD_DIM, y_end, s_render_chunk_buf);
         }
-        
-        vTaskDelay(pdMS_TO_TICKS(2)); // Tiny delay for responsiveness
     }
+    
+    // Ensure last stripe is finished before releasing state
+    xSemaphoreTake(dma_done_sem, pdMS_TO_TICKS(100));
+    xSemaphoreGive(dma_done_sem);
+    g_card_rendering = false; 
+    
     fclose(f);
 }
 
@@ -615,8 +648,10 @@ static void gui_task(void *arg) {
             }
         }
         
-        // 2. 驱动 LVGL 定时器
-        lv_timer_handler();
+        // 2. 驱动 LVGL 定时器 (仅在非硬件渲染期间刷新，防止背景层覆盖卡面)
+        if (!g_card_rendering) {
+            lv_timer_handler();
+        }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
