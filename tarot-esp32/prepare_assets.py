@@ -40,8 +40,22 @@ for i, filename in enumerate(files):
     try:
         with Image.open(os.path.join(src_dir, filename)) as img:
             img = img.convert("RGB")
-            # Precise 220x220 for direct HW blit (Space-efficient)
-            img = img.resize((220, 220), Image.LANCZOS)
+            
+            # V4.13: Narrow Width Spec (152x260) - Proportional scale (fit-within)
+            # Remove black bars by matching canvas width to card width
+            w, h = img.size
+            scale = min(152.0 / w, 260.0 / h)
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+            
+            # Combine with black canvas (152x260) for HW compatibility/Fixed size
+            final_img = Image.new("RGB", (152, 260), (0, 0, 0))
+            # Center horizontally, top-aligned vertically
+            paste_x = (152 - new_w) // 2
+            final_img.paste(img, (paste_x, 0))
+            
+            img = final_img
             
             # Convert to RGB565 binary
             raw_rgb565 = bytearray()

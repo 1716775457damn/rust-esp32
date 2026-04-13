@@ -106,7 +106,7 @@ fn start_services() -> Result<()> {
                     transform: rotate(0deg); /* Counter-rotate if needed */
                 }
                 .card-viewport {
-                    perspective: 1000px; width: 140px; height: 220px;
+                    perspective: 1000px; width: 140px; height: 165px;
                     margin-bottom: 20px;
                 }
                 .card-inner {

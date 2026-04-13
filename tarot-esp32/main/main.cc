@@ -19,7 +19,7 @@
 #include "ffi/rust_bridge.h"
 #include "st77916_init_cmds.h"
 
-static const char *TAG = "tarot_main";
+static const char *TAG = "Tarot_V4_4_Audio";
 
 /**
  * @brief Configuration Namespace
@@ -28,8 +28,9 @@ static const char *TAG = "tarot_main";
 namespace Config {
     static constexpr int LCD_H_RES = 360;
     static constexpr int LCD_V_RES = 360;
-    static constexpr int CARD_DIM = 220;
-    static constexpr int BORDER_GAP = 70; // (360 - 220) / 2
+    static constexpr int CARD_W = 152;
+    static constexpr int CARD_H = 260; // V4.13: Narrow width (152x260)
+    static constexpr int BORDER_GAP = (LCD_H_RES - CARD_W) / 2; 
     static constexpr int LV_BUF_LINES = 20;
     static constexpr uint32_t SPI_FREQ = 40 * 1000 * 1000; // V4.3: Boosted for smaller sync window
     
@@ -73,7 +74,7 @@ struct UIMessage {
 };
 
 // --- Reliability: Static memory pool to avoid heap fragmentation ---
-static uint8_t s_render_chunk_buf[Config::CARD_DIM * 10 * 2]; 
+static uint8_t s_render_chunk_buf[Config::CARD_W * 10 * 2]; 
 
 static lv_disp_draw_buf_t disp_buf;
 static lv_disp_drv_t disp_drv;
@@ -250,14 +251,14 @@ void bsp_display_init() {
 
     // 2. Card Image Viewport (Downsized to 220 to fit Flash)
     ui_card_img = lv_img_create(ui_ritual_bg);
-    lv_obj_set_size(ui_card_img, Config::CARD_DIM, Config::CARD_DIM); 
+    lv_obj_set_size(ui_card_img, Config::CARD_W, Config::CARD_H); 
     lv_obj_align(ui_card_img, LV_ALIGN_TOP_MID, 0, 30); // Lowered Y offset
     lv_obj_add_flag(ui_card_img, LV_OBJ_FLAG_HIDDEN); 
 
     // 3. Card Name Label (Golden theme)
     ui_name_label = lv_label_create(ui_ritual_bg);
     lv_obj_set_style_text_color(ui_name_label, lv_color_make(255, 215, 0), 0);
-    lv_obj_align(ui_name_label, LV_ALIGN_TOP_MID, 0, 285);
+    lv_obj_align(ui_name_label, LV_ALIGN_TOP_MID, 0, 295);
     lv_obj_set_style_text_align(ui_name_label, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(ui_name_label, "Celestial Tarot");
 
@@ -265,7 +266,7 @@ void bsp_display_init() {
     ui_keys_label = lv_label_create(ui_ritual_bg);
     lv_obj_set_style_text_color(ui_keys_label, lv_color_make(180, 160, 255), 0);
     lv_obj_set_style_text_font(ui_keys_label, &lv_font_montserrat_14, 0);
-    lv_obj_align(ui_keys_label, LV_ALIGN_TOP_MID, 0, 315);
+    lv_obj_align(ui_keys_label, LV_ALIGN_TOP_MID, 0, 325);
     lv_label_set_text(ui_keys_label, "Ready for your fate");
 
     // 5. Shuffle Ritual Spinner
@@ -300,14 +301,13 @@ extern "C" void cpp_ui_display_info(const char* name, const char* keys) {
  * @brief Error Defense: Draw a placeholder rectangle if asset is missing.
  */
 static void DrawErrorPlaceholder() {
-    LCDLock lock;
-    uint16_t* color_buf = (uint16_t*)s_render_chunk_buf;
-    // Fill with mystic purple placeholder
-    for(int i=0; i < Config::CARD_DIM * 10; i++) color_buf[i] = 0x4008; 
+    uint16_t color_buf[Config::CARD_W * 10]; 
+    for(int i=0; i < Config::CARD_W * 10; i++) color_buf[i] = 0x4008; 
     
-    for(int y=0; y < Config::CARD_DIM; y += 10) {
+    for(int y=0; y < Config::CARD_H; y += 10) {
+        LCDLock lock;
         esp_lcd_panel_draw_bitmap(panel_handle, Config::BORDER_GAP, 30 + y, 
-                                 Config::BORDER_GAP + Config::CARD_DIM, 30 + y + 10, color_buf);
+                                 Config::BORDER_GAP + Config::CARD_W, 30 + y + 10, color_buf);
     }
 }
 
@@ -324,9 +324,9 @@ static void DisplayCardToHardware(int card_idx) {
     }
 
     g_card_rendering = true; // Block LVGL refresh to protect pixels
-    const int chunk_size = Config::CARD_DIM * 10 * 2;
+    const int chunk_size = Config::CARD_W * 10 * 2;
     
-    for (int y = 0; y < Config::CARD_DIM; y += 10) {
+    for (int y = 0; y < Config::CARD_H; y += 10) {
         int y_start = 30 + y;
         int y_end   = 30 + y + 10;
         if (y_start >= y_end || y_end > Config::LCD_V_RES) break;
@@ -335,7 +335,7 @@ static void DisplayCardToHardware(int card_idx) {
         if (xSemaphoreTake(dma_done_sem, pdMS_TO_TICKS(100)) != pdTRUE) {
             ESP_LOGW(TAG, "DMA Sync Timeout at y=%d", y);
         }
-
+        
         // A. fread with defensive retry
         size_t read = 0;
         int retry = 3;
@@ -355,7 +355,7 @@ static void DisplayCardToHardware(int card_idx) {
         {
             LCDLock lock;
             esp_lcd_panel_draw_bitmap(panel_handle, Config::BORDER_GAP, y_start, 
-                                    Config::BORDER_GAP + Config::CARD_DIM, y_end, s_render_chunk_buf);
+                                    Config::BORDER_GAP + Config::CARD_W, y_end, s_render_chunk_buf);
         }
     }
     
@@ -504,7 +504,7 @@ void bsp_audio_init() {
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&pa_cfg);
-    gpio_set_level(GPIO_NUM_11, 0); 
+    gpio_set_level(GPIO_NUM_11, 1); // V4.6: Force HIGH to enable PA (Success Case Prio)
     vTaskDelay(pdMS_TO_TICKS(10));
 
     // 1. Init I2C Bus
@@ -556,7 +556,7 @@ void bsp_audio_init() {
     es8311_write_reg(0x0A, 0x0C); 
     es8311_write_reg(0x0E, 0x02); 
     es8311_write_reg(0x12, 0x00); 
-    es8311_write_reg(0x13, 0x10); 
+    es8311_write_reg(0x13, 0x10); // V4.6: Baseline word length
     es8311_write_reg(0x14, 0x1A); 
     es8311_write_reg(0x1B, 0x0A); 
     es8311_write_reg(0x1C, 0x6A); 
@@ -592,8 +592,9 @@ void bsp_audio_init() {
         },
     };
     std_cfg.slot_cfg.ws_width = I2S_DATA_BIT_WIDTH_16BIT;
+    std_cfg.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_16BIT; // V4.6: Clamp slot to data width
     std_cfg.slot_cfg.bit_shift = true;
-    std_cfg.slot_cfg.left_align = true; // Alignment: Left-aligned per reference
+    std_cfg.slot_cfg.left_align = true; // V4.6: Force Left-align per tech notes
     std_cfg.clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_256;
 
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle, &std_cfg));
@@ -680,8 +681,8 @@ extern "C" void app_main(void)
     // Start GUI Task (Prio 5)
     xTaskCreate(gui_task, "GUITask", 16384, NULL, 5, NULL);
 
-    // Start Audio Task (Prio 3)
-    xTaskCreate(audio_task, "AudioTask", 4096, NULL, 3, NULL);
+    // Start Audio Task (Prio 6 - Critical for jitter-free)
+    xTaskCreate(audio_task, "AudioTask", 4096, NULL, 6, NULL);
 
     // 3. Start Rust Core
     const char* version = rust_get_version();
